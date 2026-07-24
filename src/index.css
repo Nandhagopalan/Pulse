@@ -1,0 +1,28 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #F1F2F4;
+}
+
+body {
+  font-family: 'Albert Sans', 'Helvetica Neue', sans-serif;
+  color: #101828;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: #16A34A;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #15803D;
+}
+
+::selection {
+  background: #DCFCE7;
+}
+
+* {
+  box-sizing: border-box;
+}
