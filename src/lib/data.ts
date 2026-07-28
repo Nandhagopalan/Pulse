@@ -31,6 +31,7 @@ export interface MarketData {
   };
   volUp: number; volDn: number;
   indices: IndexSeries[];
+  flows: { fii: number[]; dii: number[] }; // ₹ Cr, last 20 sessions
 }
 
 const SECTORS: [string, number, string[]][] = [
@@ -150,6 +151,12 @@ export function buildData(): MarketData {
     return { name, value, chgPct, pts };
   });
 
-  cached = { stocks, sectors, universe, advances, declines, unchanged, newHighs, newLows, athCount, avgBias, emaVals, emaHist, adDaily, nhDaily, series, volUp, volDn, indices };
+  const flows = { fii: [] as number[], dii: [] as number[] };
+  for (let i = 0; i < 20; i++) {
+    flows.fii.push(Math.round(gauss() * 2400 - 350 + avgBias * 900));
+    flows.dii.push(Math.round(gauss() * 1500 + 1150));
+  }
+
+  cached = { stocks, sectors, universe, advances, declines, unchanged, newHighs, newLows, athCount, avgBias, emaVals, emaHist, adDaily, nhDaily, series, volUp, volDn, indices, flows };
   return cached;
 }

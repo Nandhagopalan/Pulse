@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Pulse local data & env
+.env
+.env.*
+server/data/

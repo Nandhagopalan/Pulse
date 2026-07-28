@@ -1,28 +1,53 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: #F1F2F4;
+  background: #F4F2EC;
 }
 
 body {
   font-family: 'Albert Sans', 'Helvetica Neue', sans-serif;
-  color: #101828;
+  color: #232B38;
   -webkit-font-smoothing: antialiased;
 }
 
 a {
-  color: #16A34A;
+  color: #2B4066;
   text-decoration: none;
 }
 
 a:hover {
-  color: #15803D;
+  color: #B98A2F;
 }
 
 ::selection {
-  background: #DCFCE7;
+  background: rgba(185, 138, 47, 0.22);
 }
 
 * {
   box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #DDD7C8;
+  border-radius: 99px;
+  border: 2px solid #F4F2EC;
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(28px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
