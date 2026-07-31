@@ -1,9 +1,11 @@
 /** Terminal-facing API. All routes require an authenticated session. */
+import { config } from './config.ts';
 import { getDb, metaGet } from './db.ts';
 import { requireAuth } from './auth.ts';
 import { json, type Router } from './router.ts';
 import { backfillProgress } from './ingest/nse.ts';
 import { liveQuote, isMarketOpen } from './live.ts';
+import { getCachedNews, registerWatched, newsEnabled, fetchNewsBatch } from './news.ts';
 
 /** Display name → name used in the NSE all-indices close file (uppercased). */
 const INDEX_STRIP: [string, string][] = [
@@ -140,6 +142,31 @@ export function registerApiRoutes(router: Router): void {
       return { d: b.date, o: b.open / k, h: b.high / k, l: b.low / k, c: b.close / k, v: b.volume * k };
     });
     json(ctx, 200, { sym, candles });
+  }));
+
+  router.get('/api/news', requireAuth(async ctx => {
+    const raw = (ctx.url.searchParams.get('symbols') ?? '').trim();
+    const symbols = [...new Set(
+      raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+    )].slice(0, 50);
+
+    if (!newsEnabled()) return json(ctx, 200, { enabled: false, articles: [] });
+    if (symbols.length === 0) return json(ctx, 200, { enabled: true, articles: [] });
+
+    // Register interest so the 30-min job keeps these warm.
+    await registerWatched(symbols);
+
+    let articles = await getCachedNews(symbols);
+    // Cold cache (symbol never fetched) — do one on-demand batch so the first
+    // view isn't empty, then re-read. Subsequent refreshes come from the job.
+    if (articles.length === 0) {
+      const fresh = symbols.filter(Boolean);
+      if (fresh.length) {
+        await fetchNewsBatch(fresh.slice(0, Math.max(1, config.newsSymbolsPerReq)));
+        articles = await getCachedNews(symbols);
+      }
+    }
+    json(ctx, 200, { enabled: true, articles });
   }));
 
   router.get('/api/status', requireAuth(async ctx => {

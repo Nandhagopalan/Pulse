@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS ingest_log (
   ts TEXT, job TEXT, date TEXT, status TEXT, detail TEXT
 );
+CREATE TABLE IF NOT EXISTS news_articles (
+  id TEXT,                   -- marketaux uuid
+  symbol TEXT,               -- our NSE symbol this article is tagged to
+  title TEXT, description TEXT, url TEXT, source TEXT,
+  image_url TEXT,
+  sentiment REAL,            -- -1..1 (entity sentiment for this symbol), NULL if unknown
+  published_at TEXT,         -- ISO
+  fetched_at TEXT,           -- ISO — when we stored it
+  PRIMARY KEY (id, symbol)   -- one article can be tagged to several watchlist symbols
+);
+CREATE INDEX IF NOT EXISTS idx_news_symbol_date ON news_articles(symbol, published_at DESC);
+CREATE TABLE IF NOT EXISTS watched_symbols (
+  symbol TEXT PRIMARY KEY,
+  last_seen TEXT             -- ISO — last time a client asked for this symbol's news
+);
 `;
 
 class SqliteDb implements Db {

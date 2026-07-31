@@ -3,7 +3,7 @@ import { T } from '../theme';
 
 export function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
-    <div style={{ background: T.card, border: '1px solid ' + T.border, borderRadius: T.radius, boxShadow: T.shadow, ...style }}>
+    <div style={{ background: T.card, borderRadius: T.radius, boxShadow: T.shadow + ', inset 0 0 0 1px ' + T.borderSoft, ...style }}>
       {children}
     </div>
   );
@@ -37,7 +37,7 @@ export function Mono({ children, size = 13, color = T.ink, weight = 500, style }
 
 export function Tag({ children, color = T.navy, bg = T.navySoft }: { children: ReactNode; color?: string; bg?: string }) {
   return (
-    <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.05em', padding: '3px 9px', borderRadius: 6, background: bg, color, whiteSpace: 'nowrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', height: 20, fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', padding: '0 8px', borderRadius: 99, background: bg, color, whiteSpace: 'nowrap' }}>
       {children}
     </span>
   );
@@ -69,10 +69,10 @@ export const ghostBtn: CSSProperties = {
 
 export const inkBtn: CSSProperties = {
   appearance: 'none', cursor: 'pointer', fontFamily: T.sans, fontSize: 13, fontWeight: 600,
-  padding: '8px 16px', borderRadius: 8, border: 'none', background: T.ink, color: T.card,
+  padding: '9px 16px', borderRadius: 8, border: 'none', background: T.ink, color: '#fff',
 };
 
 export const inputStyle: CSSProperties = {
-  fontFamily: T.sans, fontSize: 13.5, padding: '8px 12px', border: '1px solid ' + T.border,
+  fontFamily: T.sans, fontSize: 13.5, padding: '9px 12px', border: '1px solid ' + T.border,
   borderRadius: 8, background: T.card, color: T.ink, outline: 'none', width: '100%',
 };

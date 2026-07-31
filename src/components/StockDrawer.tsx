@@ -51,7 +51,7 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(35,43,56,0.28)', zIndex: 50, animation: 'fade-in 140ms ease' }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 430, maxWidth: '92vw', background: T.card, borderLeft: '1px solid ' + T.border, zIndex: 51, overflowY: 'auto', padding: '22px 26px 32px', animation: 'drawer-in 180ms ease' }}>
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, maxWidth: '92vw', background: T.card, boxShadow: '-12px 0 40px rgba(15,23,42,0.10)', zIndex: 51, overflowY: 'auto', padding: '22px 26px 32px', animation: 'drawer-in 180ms ease' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

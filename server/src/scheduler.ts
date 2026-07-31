@@ -12,10 +12,12 @@ import { metaGet } from './db.ts';
 import { backfill, backfillProgress, ingestFiiDii, ingestIndexConstituents, latestAvailableSession, runEodIngest } from './ingest/nse.ts';
 import { runAnalytics } from './analytics/engine.ts';
 import { pollIndexQuotes, isMarketOpen } from './live.ts';
+import { refreshWatchlistNews, newsEnabled } from './news.ts';
 import { istMinutes, istNow, istToday, isWeekend } from './util.ts';
 
 let eodRanFor = '';        // session date the EOD chain last ran for
 let preMarketRanFor = '';
+let newsRefreshedAt = 0;   // epoch ms of last watchlist-news refresh
 let busy = false;
 
 async function guarded(name: string, fn: () => Promise<unknown>): Promise<void> {
@@ -36,6 +38,15 @@ async function tick(): Promise<void> {
   const weekday = !isWeekend(today);
 
   if (isMarketOpen()) await pollIndexQuotes();
+
+  // Watchlist news refresh (independent of the EOD lock; own interval).
+  if (newsEnabled()) {
+    const intervalMs = Math.max(30, config.newsRefreshMin) * 60_000;
+    if (Date.now() - newsRefreshedAt >= intervalMs) {
+      newsRefreshedAt = Date.now();
+      refreshWatchlistNews().catch(err => console.error('[scheduler] news refresh failed:', err));
+    }
+  }
 
   // Pre-market reference sync (constituents weekly, Monday).
   if (weekday && mins >= 510 && preMarketRanFor !== today) {

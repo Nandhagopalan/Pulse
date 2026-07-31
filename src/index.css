@@ -1,26 +1,31 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: #F4F2EC;
+  background: #f7f6f3;
 }
 
 body {
-  font-family: 'Albert Sans', 'Helvetica Neue', sans-serif;
-  color: #232B38;
+  font-family: 'Public Sans', ui-sans-serif, system-ui, sans-serif;
+  color: #0b1220;
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
 }
 
+.num, .mono {
+  font-variant-numeric: tabular-nums;
+}
+
 a {
-  color: #2B4066;
+  color: #246db1;
   text-decoration: none;
 }
 
 a:hover {
-  color: #B98A2F;
+  color: #1d588f;
 }
 
 ::selection {
-  background: rgba(185, 138, 47, 0.22);
+  background: #d6e9f6;
 }
 
 * {
@@ -37,9 +42,39 @@ a:hover {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #DDD7C8;
+  background: rgba(15, 23, 42, 0.14);
   border-radius: 99px;
-  border: 2px solid #F4F2EC;
+  border: 2px solid #f7f6f3;
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/* ambient blurred gradient blobs */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ambient .blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.5;
+}
+.ambient .blob.sky {
+  width: 720px; height: 720px; bottom: -260px; left: 24%;
+  background: radial-gradient(circle at 50% 50%, rgba(125,211,252,0.5), rgba(125,211,252,0) 70%);
+}
+.ambient .blob.rose {
+  width: 380px; height: 380px; top: 52%; left: -120px;
+  background: radial-gradient(circle at 50% 50%, rgba(251,207,232,0.5), rgba(251,207,232,0) 70%);
+}
+.ambient .blob.amber {
+  width: 560px; height: 560px; top: -160px; right: -160px;
+  background: radial-gradient(circle at 50% 50%, rgba(253,224,71,0.35), rgba(253,224,71,0) 70%);
 }
 
 @keyframes drawer-in {

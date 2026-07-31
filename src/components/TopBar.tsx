@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import ikigaiIcon from '../assets/ikigai-mark.jpeg';
 import { T } from '../theme';
 import { Label, Mono, inputStyle } from './ui';
 import type { Profile } from '../lib/profile';
 import { fmtInr } from '../lib/profile';
-
-function marketStatus(now: Date) {
-  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const day = ist.getDay();
-  const mins = ist.getHours() * 60 + ist.getMinutes();
-  const open = day >= 1 && day <= 5 && mins >= 555 && mins <= 930; // 09:15–15:30 IST
-  return { open, label: open ? 'MARKET OPEN' : 'MARKET CLOSED' };
-}
+import { marketStatus } from '../lib/market';
+import type { SessionUser } from '../lib/api';
 
 function ProfileField({ label, value, onCommit, prefix }: {
   label: string; value: number; onCommit: (n: number) => void; prefix?: string;
@@ -39,15 +32,15 @@ function ProfileField({ label, value, onCommit, prefix }: {
   );
 }
 
-import type { SessionUser } from '../lib/api';
-
-export function TopBar({ profile, updateProfile, watchCount, sessionUser, dataSource, asOf, onLogout }: {
+export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, dataSource, asOf, onRefresh, onLogout }: {
+  title: string;
   profile: Profile;
   updateProfile: (p: Partial<Profile>) => void;
   watchCount: number;
   sessionUser?: SessionUser | null;
   dataSource?: 'live' | 'demo';
   asOf?: string | null;
+  onRefresh?: () => void;
   onLogout?: () => void;
 }) {
   const [now, setNow] = useState(() => new Date());
@@ -70,101 +63,102 @@ export function TopBar({ profile, updateProfile, watchCount, sessionUser, dataSo
 
   const status = marketStatus(now);
   const clock = now.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata', weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).replace(',', '') + ' IST';
   const riskPerTrade = profile.capital * profile.riskPct / 100;
 
+  const pill = (bg: string, dot: string, textColor: string, label: string, title?: string) => (
+    <div title={title} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 30, padding: '0 12px', borderRadius: 99, background: bg, boxShadow: bg === T.card ? 'inset 0 0 0 1px ' + T.border : 'none' }}>
+      <span style={{ width: 7, height: 7, borderRadius: 99, background: dot, display: 'block' }} />
+      <span style={{ fontSize: 12, fontWeight: 600, color: textColor }}>{label}</span>
+    </div>
+  );
+
   return (
-    <div style={{ background: T.card, borderBottom: '1px solid ' + T.border, position: 'sticky', top: 0, zIndex: 40 }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '10px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-          <img src={ikigaiIcon} alt="Ikigai" style={{ height: 44, width: 'auto', display: 'block', mixBlendMode: 'multiply' }} />
-          <div style={{ lineHeight: 1 }}>
-            <div style={{ fontFamily: T.serif, fontSize: 21, fontWeight: 600, letterSpacing: '0.01em', color: T.ink }}>Pulse</div>
-            <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.22em', color: T.faint, marginTop: 4 }}>IKIGAI TRADER · SWING TERMINAL</div>
-          </div>
-        </div>
+    <header style={{ height: 56, flexShrink: 0, position: 'sticky', top: 0, zIndex: 15, background: 'rgba(247,246,243,0.82)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid ' + T.border, display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px' }}>
+      <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink }}>{title}</div>
+      <div style={{ flex: 1 }} />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Mono size={12} color={T.muted}>{clock}</Mono>
-          {dataSource && (
-            <div
-              title={dataSource === 'live' ? 'NSE EOD data' + (asOf ? ' · as of ' + asOf : '') : 'Synthetic demo data — backend not connected'}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, background: dataSource === 'live' ? T.amberSoft : T.borderSoft, borderRadius: 99, padding: '4px 12px' }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: 99, background: dataSource === 'live' ? T.amber : T.faint, display: 'block' }} />
-              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.07em', color: dataSource === 'live' ? T.amber : T.muted }}>
-                {dataSource === 'live' ? 'NSE DATA' + (asOf ? ' · ' + asOf.slice(5) : '') : 'DEMO DATA'}
-              </span>
+      <Mono size={11.5} color={T.faint}>{clock}</Mono>
+
+      {dataSource === 'live'
+        ? pill(T.amberSoft, T.amber, T.amber, 'NSE' + (asOf ? ' · ' + asOf.slice(5) : ''), 'NSE EOD data' + (asOf ? ' · as of ' + asOf : ''))
+        : pill(T.cardAlt, T.faint, T.muted, 'Demo data', 'Synthetic demo data — backend not connected')}
+
+      {status.open
+        ? pill(T.upSoft, T.up, T.up, status.label)
+        : pill(T.card, T.faint, T.text, status.label)}
+
+      {onRefresh && (
+        <button
+          onClick={onRefresh}
+          title="Refresh"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 12px', borderRadius: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + T.border, color: T.text, fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+        >
+          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+          Refresh
+        </button>
+      )}
+
+      <div ref={menuRef} style={{ position: 'relative' }}>
+        <button
+          onClick={() => setMenuOpen(v => !v)}
+          title="Profile"
+          style={{ appearance: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + (menuOpen ? T.faint : T.border), borderRadius: 99, padding: '3px 12px 3px 4px', height: 32 }}
+        >
+          <span style={{ width: 24, height: 24, borderRadius: 99, background: 'linear-gradient(135deg,#3184CB,#1b3d61)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700 }}>
+            {(sessionUser?.name ?? profile.name).charAt(0).toUpperCase()}
+          </span>
+          <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{sessionUser?.name ?? profile.name}</span>
+        </button>
+
+        {menuOpen && (
+          <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 320, background: T.card, border: '1px solid ' + T.border, borderRadius: 14, boxShadow: T.shadowPop, padding: 20, animation: 'fade-in 120ms ease' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>{sessionUser?.name ?? profile.name}</div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{profile.handle} · {profile.style}</div>
+                <div style={{ fontSize: 11.5, color: T.faint, marginTop: 1 }}>{sessionUser?.email ?? profile.email}</div>
+              </div>
+              {sessionUser && onLogout && (
+                <button
+                  onClick={onLogout}
+                  style={{ appearance: 'none', cursor: 'pointer', border: '1px solid ' + T.border, background: T.cardAlt, borderRadius: 8, padding: '5px 10px', fontFamily: T.sans, fontSize: 11.5, fontWeight: 600, color: T.muted }}
+                >
+                  Sign out
+                </button>
+              )}
             </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: status.open ? T.upSoft : T.borderSoft, borderRadius: 99, padding: '4px 12px' }}>
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: status.open ? T.up : T.faint, display: 'block' }} />
-            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.07em', color: status.open ? T.up : T.muted }}>{status.label}</span>
-          </div>
 
-          <div ref={menuRef} style={{ position: 'relative' }}>
-            <button
-              onClick={() => setMenuOpen(v => !v)}
-              title="Profile"
-              style={{ appearance: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 9, border: '1px solid ' + (menuOpen ? T.faint : T.border), background: T.card, borderRadius: 99, padding: '4px 12px 4px 5px' }}
-            >
-              <span style={{ width: 26, height: 26, borderRadius: 99, background: T.navy, color: '#F4F2EC', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: T.serif, fontSize: 13, fontWeight: 600 }}>
-                {(sessionUser?.name ?? profile.name).charAt(0).toUpperCase()}
-              </span>
-              <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{sessionUser?.name ?? profile.name}</span>
-            </button>
+            <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
 
-            {menuOpen && (
-              <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 320, background: T.card, border: '1px solid ' + T.border, borderRadius: 14, boxShadow: '0 12px 32px rgba(35,43,56,0.12)', padding: 20, animation: 'fade-in 120ms ease' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <img src={ikigaiIcon} alt="" style={{ height: 44, mixBlendMode: 'multiply' }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: T.serif, fontSize: 16, fontWeight: 600, color: T.ink }}>{sessionUser?.name ?? profile.name}</div>
-                    <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{profile.handle} · {profile.style}</div>
-                    <div style={{ fontSize: 11.5, color: T.faint, marginTop: 1 }}>{sessionUser?.email ?? profile.email}</div>
-                  </div>
-                  {sessionUser && onLogout && (
-                    <button
-                      onClick={onLogout}
-                      style={{ appearance: 'none', cursor: 'pointer', border: '1px solid ' + T.border, background: T.cardAlt, borderRadius: 8, padding: '5px 10px', fontFamily: T.sans, fontSize: 11.5, fontWeight: 600, color: T.muted }}
-                    >
-                      Sign out
-                    </button>
-                  )}
-                </div>
-
-                <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
-
-                <Label>Risk settings</Label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-                  <ProfileField label="Capital" value={profile.capital} onCommit={n => updateProfile({ capital: n })} prefix="₹" />
-                  <ProfileField label="Risk / trade %" value={profile.riskPct} onCommit={n => updateProfile({ riskPct: n })} />
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-                  <ProfileField label="Max positions" value={profile.maxPos} onCommit={n => updateProfile({ maxPos: Math.round(n) })} />
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Risk per trade</div>
-                    <div style={{ padding: '8px 12px', border: '1px solid ' + T.borderSoft, borderRadius: 8, background: T.cardAlt }}>
-                      <Mono size={13} color={T.amber} weight={600}>{fmtInr(riskPerTrade)}</Mono>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: T.muted }}>
-                  <span>Watchlist</span>
-                  <Mono size={12}>{watchCount} stocks</Mono>
-                </div>
-                <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
-                  Position sizes across the terminal are computed from these settings.
+            <Label>Risk settings</Label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+              <ProfileField label="Capital" value={profile.capital} onCommit={n => updateProfile({ capital: n })} prefix="₹" />
+              <ProfileField label="Risk / trade %" value={profile.riskPct} onCommit={n => updateProfile({ riskPct: n })} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+              <ProfileField label="Max positions" value={profile.maxPos} onCommit={n => updateProfile({ maxPos: Math.round(n) })} />
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Risk per trade</div>
+                <div style={{ padding: '8px 12px', border: '1px solid ' + T.borderSoft, borderRadius: 8, background: T.cardAlt }}>
+                  <Mono size={13} color={T.amber} weight={600}>{fmtInr(riskPerTrade)}</Mono>
                 </div>
               </div>
-            )}
+            </div>
+
+            <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: T.muted }}>
+              <span>Watchlist</span>
+              <Mono size={12}>{watchCount} stocks</Mono>
+            </div>
+            <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
+              Position sizes across the terminal are computed from these settings.
+            </div>
           </div>
-        </div>
+        )}
       </div>
-    </div>
+    </header>
   );
 }

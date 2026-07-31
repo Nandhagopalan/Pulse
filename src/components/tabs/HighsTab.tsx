@@ -24,10 +24,13 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
     { id: 'ath', label: 'All-time highs' },
     { id: 'wk', label: 'Weekly breakouts' },
   ];
+  const pool = pools[highMode];
+  // Counts reflect the active high-mode, so the dropdown shows where the
+  // breakouts actually are before you commit to a sector.
+  const perSector: Record<string, number> = {};
+  pool.forEach(s => { perSector[s.sector] = (perSector[s.sector] || 0) + 1; });
   const sectorOptions = ['All sectors', ...D.sectors.map(s => s.name)];
-  const rows = pools[highMode]
-    .filter(s => sectorFilter === 'All sectors' || s.sector === sectorFilter)
-    .sort((a, b) => b.chg1w - a.chg1w);
+  const rows = pool.filter(s => sectorFilter === 'All sectors' || s.sector === sectorFilter);
 
   return (
     <div style={{ marginTop: 18 }}>
@@ -43,7 +46,9 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
           })}
         </div>
         <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 500, padding: '8px 12px', borderRadius: 8, border: '1px solid ' + T.border, background: T.card, color: T.text }}>
-          {sectorOptions.map(o => <option key={o} value={o}>{o}</option>)}
+          {sectorOptions.map(o => (
+            <option key={o} value={o}>{o === 'All sectors' ? o + ' · ' + pool.length : o + ' · ' + (perSector[o] || 0)}</option>
+          ))}
         </select>
       </div>
 
@@ -53,7 +58,8 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
           watch={watch}
           toggle={toggle}
           onOpen={onOpen}
-          footnote={rows.length + ' stocks · sorted by 1-week momentum · click a row for fundamentals, star it to watch'}
+          initialSort={{ key: 'chg1w', dir: 'desc' }}
+          footnote={rows.length + ' stocks · click any column header to sort · click a row for fundamentals, star it to watch'}
         />
       </div>
     </div>

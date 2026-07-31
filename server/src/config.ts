@@ -45,8 +45,20 @@ export const config = {
   backfillSessions: Number(env('BACKFILL_SESSIONS', '270')),
   /** Dev only: when '1', GET /auth/dev-login creates a session without Kite. */
   devLogin: env('DEV_LOGIN', '') === '1',
+  /** Marketaux news API token (marketaux.com). News features disabled if unset.
+   *  Accepts MARKETAUX_API_KEY or the shorter MARKET_AUX_KEY. */
+  marketauxApiKey: env('MARKETAUX_API_KEY') || env('MARKET_AUX_KEY'),
+  /** Minutes between watchlist news refreshes (free tier = 100 req/day; keep ≥30). */
+  newsRefreshMin: Number(env('NEWS_REFRESH_MIN', '30')),
+  /** Suffix Marketaux uses for NSE symbols (RELIANCE → RELIANCE.NS). */
+  newsSymbolSuffix: env('NEWS_SYMBOL_SUFFIX', '.NS'),
+  /** Symbols batched per Marketaux request (comma-separated); free tier caps articles. */
+  newsSymbolsPerReq: Number(env('NEWS_SYMBOLS_PER_REQ', '5')),
 };
 
 if (!config.kiteApiKey || !config.kiteApiSecret) {
   console.warn('[config] ZERODHA_API_KEY / ZERODHA_API_SECRET missing — Kite SSO will not work.');
+}
+if (!config.marketauxApiKey) {
+  console.warn('[config] MARKETAUX_API_KEY missing — watchlist news will be unavailable.');
 }

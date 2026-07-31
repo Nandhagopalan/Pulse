@@ -14,6 +14,18 @@
       "runtimeArgs": ["run", "dev", "--", "--port", "5175", "--strictPort"],
       "port": 5175,
       "autoPort": false
+    },
+    {
+      "name": "studio-api",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /home/ijarvis/Desktop/Projects/Personal/ai-media-marketplace/server && uv run uvicorn studio.main:app --port 8100"],
+      "port": 8100
+    },
+    {
+      "name": "studio-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /home/ijarvis/Desktop/Projects/Personal/ai-media-marketplace/web && npm run dev -- --port 5183 --strictPort"],
+      "port": 5183
     }
   ]
 }

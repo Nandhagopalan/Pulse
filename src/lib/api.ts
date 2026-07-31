@@ -50,4 +50,21 @@ export function fetchCandles(sym: string, n = 180): Promise<{ sym: string; candl
   return request(`/api/stocks/${encodeURIComponent(sym)}/candles?n=${n}`);
 }
 
+export interface NewsArticle {
+  id: string;
+  symbol: string;
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  imageUrl: string | null;
+  sentiment: number | null;
+  publishedAt: string;
+}
+
+export function fetchNews(symbols: string[]): Promise<{ enabled: boolean; articles: NewsArticle[] }> {
+  const qs = encodeURIComponent(symbols.join(','));
+  return request(`/api/news?symbols=${qs}`);
+}
+
 export const kiteLoginUrl = '/auth/kite/login';

@@ -1,32 +1,41 @@
-// Ikigai design system — ink enso on warm paper, amber candles.
-// One ink, one accent; green/red reserved strictly for price direction.
+// LearnVerse design language — warm off-white paper, cool ink scale, one blue brand.
+// Token names are kept stable so every tab re-skins from this single source.
+// green/red are reserved strictly for price direction; amber for accent highlights.
 export const T = {
-  bg: '#F4F2EC',
-  card: '#FDFCF9',
-  cardAlt: '#F8F6F0',
-  border: '#E6E1D5',
-  borderSoft: '#EFEBE1',
+  bg: '#f7f6f3',
+  card: '#ffffff',
+  cardAlt: '#f5f6f8',
+  border: '#e6e8ec',
+  borderSoft: '#eef0f3',
 
-  ink: '#232B38',
-  navy: '#2B4066',
-  navySoft: 'rgba(43,64,102,0.08)',
-  text: '#3D4450',
-  muted: '#8C8677',
-  faint: '#B5AE9E',
+  ink: '#0b1220',
+  // "navy" token is mapped to the brand blue so existing usages become brand-accented.
+  navy: '#246db1',
+  navySoft: 'rgba(36,109,177,0.08)',
+  text: '#2c3548',
+  muted: '#6b7280',
+  faint: '#9aa1ad',
 
-  amber: '#B98A2F',
-  amberSoft: 'rgba(185,138,47,0.12)',
+  amber: '#a16207',
+  amberSoft: 'rgba(161,98,7,0.10)',
 
-  up: '#3A7863',
-  upSoft: 'rgba(58,120,99,0.10)',
-  down: '#A85A4A',
-  downSoft: 'rgba(168,90,74,0.10)',
+  up: '#15803d',
+  upSoft: 'rgba(21,128,61,0.10)',
+  down: '#b91c1c',
+  downSoft: 'rgba(185,28,28,0.10)',
 
-  serif: "'Fraunces', Georgia, serif",
-  sans: "'Albert Sans', 'Helvetica Neue', sans-serif",
-  mono: "'IBM Plex Mono', monospace",
+  // brand ramp (explicit, for the new shell)
+  brand: '#3184CB',
+  brand50: '#eef6fc',
+  brand600: '#246db1',
+  brand700: '#1d588f',
 
-  shadow: '0 1px 2px rgba(35,43,56,0.04)',
+  serif: "'Public Sans', ui-sans-serif, system-ui, sans-serif",
+  sans: "'Public Sans', ui-sans-serif, system-ui, sans-serif",
+  mono: "'JetBrains Mono', ui-monospace, monospace",
+
+  shadow: '0 1px 0 rgba(15,23,42,0.04), 0 1px 2px rgba(15,23,42,0.04)',
+  shadowPop: '0 8px 24px rgba(15,23,42,0.08), 0 2px 6px rgba(15,23,42,0.04)',
   radius: 14,
 } as const;
 
