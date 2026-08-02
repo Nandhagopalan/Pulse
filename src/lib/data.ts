@@ -32,6 +32,10 @@ export interface MarketData {
   volUp: number; volDn: number;
   indices: IndexSeries[];
   flows: { fii: number[]; dii: number[] }; // ₹ Cr, last 20 sessions
+  // Session dates (YYYY-MM-DD) aligned to the tail of the breadth history.
+  // Charts read their own window off the end of this axis.
+  dates: string[];
+  flowDates: string[];
 }
 
 const SECTORS: [string, number, string[]][] = [
@@ -157,6 +161,21 @@ export function buildData(): MarketData {
     flows.dii.push(Math.round(gauss() * 1500 + 1150));
   }
 
-  cached = { stocks, sectors, universe, advances, declines, unchanged, newHighs, newLows, athCount, avgBias, emaVals, emaHist, adDaily, nhDaily, series, volUp, volDn, indices, flows };
+  // Weekday-only session axis ending today, matching the 120-session breadth
+  // history the analytics engine emits.
+  const dates: string[] = [];
+  const cursor = new Date();
+  while (dates.length < 120) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  dates.reverse();
+
+  cached = {
+    stocks, sectors, universe, advances, declines, unchanged, newHighs, newLows, athCount,
+    avgBias, emaVals, emaHist, adDaily, nhDaily, series, volUp, volDn, indices, flows,
+    dates, flowDates: dates.slice(-20),
+  };
   return cached;
 }

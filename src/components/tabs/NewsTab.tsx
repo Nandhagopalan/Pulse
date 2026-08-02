@@ -3,6 +3,10 @@ import { T } from '../../theme';
 import { Card } from '../ui';
 import { fetchNews, type NewsArticle } from '../../lib/api';
 import type { MarketData } from '../../lib/data';
+import { useQueryParam } from '../../lib/router';
+import type { Route } from '../../lib/router';
+
+type Navigate = (target: string, opts?: { replace?: boolean }) => void;
 
 function relTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -26,12 +30,17 @@ function sentimentMeta(s: number | null): { color: string; label: string } {
 
 const REFRESH_MS = 5 * 60_000; // client re-pull; server refreshes source every 30 min
 
-export function NewsTab({ D, watch }: { D: MarketData; watch: Record<string, true> }) {
+export function NewsTab({ D, route, navigate, watch }: {
+  D: MarketData;
+  route: Route;
+  navigate: Navigate;
+  watch: Record<string, true>;
+}) {
   const watchSyms = useMemo(() => Object.keys(watch), [watch]);
   const [state, setState] = useState<{ loading: boolean; enabled: boolean; articles: NewsArticle[]; error: boolean }>(
     { loading: true, enabled: true, articles: [], error: false },
   );
-  const [filter, setFilter] = useState<string>('all');
+  const [filter, setFilter] = useQueryParam(route, navigate, 'sym', 'all');
 
   const symKey = watchSyms.join(',');
   useEffect(() => {

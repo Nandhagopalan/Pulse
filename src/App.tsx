@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { T, dirColor } from './theme';
 import { areaLine } from './lib/svg';
 import { useProfile } from './lib/profile';
+import { useRoute, buildHash } from './lib/router';
 import { useMarket } from './lib/useMarket';
 import { logout } from './lib/api';
 import { LoginGate, BootstrapScreen } from './components/LoginGate';
@@ -9,7 +10,8 @@ import { Mono, Sparkline, ghostBtn, inkBtn, inputStyle } from './components/ui';
 import { Sidebar, type NavItem } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { StockDrawer } from './components/StockDrawer';
-import { BreadthTab } from './components/tabs/BreadthTab';
+import { BreadthTab, RANGES } from './components/tabs/BreadthTab';
+import type { BreadthRange } from './components/tabs/BreadthTab';
 import { ChartsTab } from './components/tabs/ChartsTab';
 import { SectorsTab } from './components/tabs/SectorsTab';
 import { HighsTab } from './components/tabs/HighsTab';
@@ -29,15 +31,26 @@ const DEFAULT_QUOTES = [
 type TabId = 'breadth' | 'chart' | 'sectors' | 'highs' | 'draw' | 'watch' | 'news';
 type CardMode = 'area' | 'bar';
 
-const TAB_META: Record<TabId, { label: string; sub: string }> = {
-  breadth: { label: 'Breadth', sub: 'Market participation & internals' },
-  chart: { label: 'Charts', sub: 'Price action with EMAs' },
-  sectors: { label: 'Sectors', sub: 'Rotation & relative strength' },
-  highs: { label: 'Highs', sub: 'Fresh highs & breakouts' },
-  draw: { label: 'Drawdown', sub: 'How far stocks sit off their peaks' },
-  watch: { label: 'Watchlist', sub: 'Your swing candidates' },
-  news: { label: 'News', sub: 'Headlines for your watchlist' },
+const TAB_META: Record<TabId, { label: string; sub: string; slug: string }> = {
+  breadth: { label: 'Breadth', sub: 'Market participation & internals', slug: 'breadth' },
+  chart: { label: 'Charts', sub: 'Price action with EMAs', slug: 'charts' },
+  sectors: { label: 'Sectors', sub: 'Rotation & relative strength', slug: 'sectors' },
+  highs: { label: 'Highs', sub: 'Fresh highs & breakouts', slug: 'highs' },
+  draw: { label: 'Drawdown', sub: 'How far stocks sit off their peaks', slug: 'drawdown' },
+  watch: { label: 'Watchlist', sub: 'Your swing candidates', slug: 'watchlist' },
+  news: { label: 'News', sub: 'Headlines for your watchlist', slug: 'news' },
 };
+
+const TAB_IDS = Object.keys(TAB_META) as TabId[];
+const SLUG_TO_TAB: Record<string, TabId> = Object.fromEntries(
+  TAB_IDS.map(id => [TAB_META[id].slug, id]),
+);
+
+const HIGH_MODES: HighMode[] = ['w52', 'ath', 'wk'];
+const DEFAULT_HIGH_MODE: HighMode = 'w52';
+const DEFAULT_CHART_SYM = 'NIFTY 50';
+const ALL_SECTORS = 'All sectors';
+const DEFAULT_BREADTH_RANGE: BreadthRange = '1m';
 
 function useWatchlist() {
   const [watch, setWatch] = useState<Record<string, true>>({});
@@ -87,20 +100,71 @@ function useQuotes() {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<TabId>('breadth');
   const [collapsed, setCollapsed] = useState(false);
-  const [chartSym, setChartSym] = useState('NIFTY 50');
-  const [highMode, setHighMode] = useState<HighMode>('w52');
-  const [sectorFilter, setSectorFilter] = useState('All sectors');
-  const [cardMode, setCardMode] = useState<Record<string, CardMode>>({});
   const [addingQuote, setAddingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
-  const [drawerSym, setDrawerSym] = useState<string | null>(null);
 
+  const { route, navigate } = useRoute();
   const { watch, toggle } = useWatchlist();
   const { quoteText, shuffle, addQuote } = useQuotes();
   const { profile, update } = useProfile();
   const market = useMarket();
+
+  // The URL is the single source of truth for which page is showing and how it
+  // is filtered, so every view is reachable by link and survives a reload.
+  const tab = SLUG_TO_TAB[route.segments[0]] ?? 'breadth';
+  const chartSym = tab === 'chart' ? route.segments[1] || DEFAULT_CHART_SYM : DEFAULT_CHART_SYM;
+  const routeHighMode = route.segments[1] as HighMode | undefined;
+  const highMode = tab === 'highs' && routeHighMode && HIGH_MODES.includes(routeHighMode)
+    ? routeHighMode
+    : DEFAULT_HIGH_MODE;
+  const sectorFilter = route.query.get('sector') || ALL_SECTORS;
+  const drawerSym = route.query.get('stock');
+
+  // Breadth history window (?range=1m); unknown values fall back to the default.
+  const routeRange = route.query.get('range') as BreadthRange | null;
+  const breadthRange: BreadthRange = routeRange && RANGES.some(r => r.id === routeRange)
+    ? routeRange
+    : DEFAULT_BREADTH_RANGE;
+
+  // Breadth card chart types ride in one compact param: ?m=newHighs:area,up20:bar
+  const cardMode: Record<string, CardMode> = {};
+  for (const part of (route.query.get('m') || '').split(',')) {
+    const [id, mode] = part.split(':');
+    if (id && (mode === 'area' || mode === 'bar')) cardMode[id] = mode;
+  }
+
+  // Unknown or bare hashes settle on a canonical URL without adding history.
+  const canonicalUnknown = !route.segments.length || !SLUG_TO_TAB[route.segments[0]];
+  useEffect(() => {
+    if (canonicalUnknown) navigate(buildHash(['breadth']), { replace: true });
+  }, [canonicalUnknown, navigate]);
+
+  const go = (id: TabId) => {
+    // Sub-path and filters belong to the page being left, so drop them.
+    if (id === 'highs') navigate(buildHash(['highs', DEFAULT_HIGH_MODE]));
+    else if (id === 'chart') navigate(buildHash(['charts', DEFAULT_CHART_SYM]));
+    else navigate(buildHash([TAB_META[id].slug]));
+  };
+  const setChartSym = (sym: string) => navigate(buildHash(['charts', sym]));
+  const setHighMode = (m: HighMode) => {
+    const sector = route.query.get('sector');
+    navigate(buildHash(['highs', m], { sector }), { replace: true });
+  };
+  const setSectorFilter = (s: string) => {
+    const rest = route.segments.map(encodeURIComponent).join('/');
+    const params = new URLSearchParams(route.query);
+    if (!s || s === ALL_SECTORS) params.delete('sector'); else params.set('sector', s);
+    const qs = params.toString();
+    navigate('#/' + rest + (qs ? '?' + qs : ''), { replace: true });
+  };
+  const setDrawerSym = (sym: string | null) => {
+    const rest = route.segments.map(encodeURIComponent).join('/');
+    const params = new URLSearchParams(route.query);
+    if (sym) params.set('stock', sym); else params.delete('stock');
+    const qs = params.toString();
+    navigate('#/' + rest + (qs ? '?' + qs : ''), { replace: !sym });
+  };
 
   if (market.auth === 'checking') {
     return <div style={{ minHeight: '100vh', background: T.bg }} />;
@@ -116,7 +180,19 @@ export default function App() {
   const drawerStock = drawerSym ? D.stocks.find(s => s.sym === drawerSym) || null : null;
   const watchCount = Object.keys(watch).length;
 
-  const setCard = (id: string, m: CardMode) => setCardMode(prev => ({ ...prev, [id]: m }));
+  const setCard = (id: string, m: CardMode) => {
+    const next = { ...cardMode, [id]: m };
+    const encoded = Object.entries(next).map(([k, v]) => k + ':' + v).join(',');
+    const params = new URLSearchParams(route.query);
+    params.set('m', encoded);
+    navigate(buildHash(route.segments, Object.fromEntries(params)), { replace: true });
+  };
+
+  const setBreadthRange = (r: BreadthRange) => {
+    const params = new URLSearchParams(route.query);
+    if (r === DEFAULT_BREADTH_RANGE) params.delete('range'); else params.set('range', r);
+    navigate(buildHash(route.segments, Object.fromEntries(params)), { replace: true });
+  };
 
   const saveDraft = () => {
     addQuote(quoteDraft);
@@ -144,7 +220,7 @@ export default function App() {
       value: ix.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
       chg: (ix.chgPct >= 0 ? '+' : '') + ix.chgPct.toFixed(2) + '%',
       color, fill, line: p.line, area: p.area,
-      open: () => { setTab('chart'); setChartSym(ix.name); },
+      open: () => setChartSym(ix.name),
     };
   });
 
@@ -158,7 +234,7 @@ export default function App() {
         <Sidebar
           items={navItems}
           active={tab}
-          onNav={id => setTab(id as TabId)}
+          onNav={id => go(id as TabId)}
           collapsed={collapsed}
           onToggle={() => setCollapsed(c => !c)}
           userName={market.user?.name ?? profile.name}
@@ -211,9 +287,14 @@ export default function App() {
               </div>
             )}
 
-            {tab === 'breadth' && <BreadthTab D={D} cardMode={cardMode} setCard={setCard} />}
+            {tab === 'breadth' && (
+              <BreadthTab
+                D={D} cardMode={cardMode} setCard={setCard}
+                range={breadthRange} setRange={setBreadthRange}
+              />
+            )}
             {tab === 'chart' && <ChartsTab D={D} chartSym={chartSym} setChartSym={setChartSym} watch={watch} />}
-            {tab === 'sectors' && <SectorsTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
+            {tab === 'sectors' && <SectorsTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
             {tab === 'highs' && (
               <HighsTab
                 D={D} highMode={highMode} setHighMode={setHighMode}
@@ -221,9 +302,9 @@ export default function App() {
                 watch={watch} toggle={toggle} onOpen={setDrawerSym}
               />
             )}
-            {tab === 'draw' && <DrawdownTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
+            {tab === 'draw' && <DrawdownTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
             {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} />}
-            {tab === 'news' && <NewsTab D={D} watch={watch} />}
+            {tab === 'news' && <NewsTab D={D} route={route} navigate={navigate} watch={watch} />}
           </div>
         </main>
       </div>

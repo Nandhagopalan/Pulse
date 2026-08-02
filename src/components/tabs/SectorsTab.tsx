@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { T, dirColor } from '../../theme';
 import { Mono, Meter } from '../ui';
 import { TableShell, TableHead, Footnote, stockTag } from '../StockTable';
@@ -7,6 +7,10 @@ import type { MarketData, Sector, Stock } from '../../lib/data';
 import { fmtPct, fmtPrice } from '../../lib/format';
 import { useSort, sortLabel } from '../../lib/sort';
 import type { SortSpec } from '../../lib/sort';
+import { useQueryParam } from '../../lib/router';
+import type { Route } from '../../lib/router';
+
+type Navigate = (target: string, opts?: { replace?: boolean }) => void;
 
 const GRID = '18px 1.5fr 0.7fr 0.9fr 1.4fr 0.8fr 0.7fr 1.2fr';
 const SUB = '34px 1.1fr 0.9fr 0.7fr 0.7fr 0.9fr 0.9fr';
@@ -60,13 +64,14 @@ type Side = 'all' | 'adv' | 'dec';
 
 // Expanded panel: the actual constituents of one sector, split into advancing
 // and declining, each sortable on its own.
-function SectorDetail({ stocks, watch, toggle, onOpen }: {
+function SectorDetail({ stocks, side, setSide, watch, toggle, onOpen }: {
   stocks: Stock[];
+  side: Side;
+  setSide: (s: Side) => void;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
 }) {
-  const [side, setSide] = useState<Side>('all');
   const advList = stocks.filter(s => s.chg1d >= 0);
   const decList = stocks.filter(s => s.chg1d < 0);
   const pool = side === 'adv' ? advList : side === 'dec' ? decList : stocks;
@@ -141,13 +146,32 @@ function SectorDetail({ stocks, watch, toggle, onOpen }: {
   );
 }
 
-export function SectorsTab({ D, watch, toggle, onOpen }: {
+export function SectorsTab({ D, route, navigate, watch, toggle, onOpen }: {
   D: MarketData;
+  route: Route;
+  navigate: Navigate;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
 }) {
-  const [open, setOpen] = useState<string | null>(null);
+  // Which sector is drilled into, and which side of it, both live in the URL.
+  const openParam = route.query.get('open') || '';
+  const sideParam = route.query.get('side') || 'all';
+  const open = openParam || null;
+  const side: Side = sideParam === 'adv' || sideParam === 'dec' ? sideParam : 'all';
+  const [, setSideParam] = useQueryParam(route, navigate, 'side', 'all');
+
+  // `open` and `side` are written together: a side filter is meaningless once
+  // the sector it belongs to is collapsed, and two separate param writes off the
+  // same route would clobber each other.
+  const setOpenSector = (name: string) => {
+    const params = new URLSearchParams(route.query);
+    params.delete('side');
+    if (name) params.set('open', name); else params.delete('open');
+    const path = route.segments.map(encodeURIComponent).join('/');
+    const qs = params.toString();
+    navigate('#/' + path + (qs ? '?' + qs : ''), { replace: true });
+  };
   const { sorted, sort, onSort } = useSort(D.sectors, SPECS, { key: 'score', dir: 'desc' });
 
   // Tracked constituents grouped by sector, so the drill-down lists real names.
@@ -167,7 +191,7 @@ export function SectorsTab({ D, watch, toggle, onOpen }: {
           return (
             <div key={s.name}>
               <div
-                onClick={() => setOpen(expanded ? null : s.name)}
+                onClick={() => setOpenSector(expanded ? '' : s.name)}
                 title={expanded ? 'Collapse' : 'Show constituents'}
                 style={{ display: 'grid', gridTemplateColumns: GRID, gap: 14, alignItems: 'center', padding: '12px 22px', borderBottom: '1px solid ' + T.borderSoft, fontSize: 13.5, cursor: 'pointer', background: expanded ? T.cardAlt : 'transparent' }}
                 onMouseEnter={e => { if (!expanded) (e.currentTarget as HTMLDivElement).style.background = T.cardAlt; }}
@@ -192,7 +216,14 @@ export function SectorsTab({ D, watch, toggle, onOpen }: {
                   <Mono size={12} weight={600} style={{ width: 24, textAlign: 'right', display: 'inline-block' }}>{s.score}</Mono>
                 </div>
               </div>
-              {expanded && <SectorDetail stocks={members} watch={watch} toggle={toggle} onOpen={onOpen} />}
+              {expanded && (
+                <SectorDetail
+                  stocks={members}
+                  side={side}
+                  setSide={s => setSideParam(s)}
+                  watch={watch} toggle={toggle} onOpen={onOpen}
+                />
+              )}
             </div>
           );
         })}
