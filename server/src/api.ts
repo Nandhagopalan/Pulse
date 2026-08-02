@@ -64,8 +64,10 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
     'SELECT date, category, net FROM fii_dii ORDER BY date DESC LIMIT 60',
   );
   const fii: number[] = [], dii: number[] = [];
+  const flowDates: string[] = [];
   for (const r of flowRows.reverse()) {
     (r.category === 'FII' ? fii : dii).push(r.net);
+    if (r.category === 'FII') flowDates.push(r.date);
   }
 
   const total = breadth.advances + breadth.declines || 1;
@@ -89,6 +91,10 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
     volDn: breadth.series.down4vol[breadth.series.down4vol.length - 1] ?? 0,
     indices,
     flows: { fii: padTo(fii, 20), dii: padTo(dii, 20) },
+    // Session date axis for the breadth history, so every chart can state the
+    // exact window it covers instead of an unlabelled bar count.
+    dates: Array.isArray(breadth.dates) ? breadth.dates : [],
+    flowDates: flowDates.slice(-20),
   };
 }
 

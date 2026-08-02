@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { T, dirColor } from '../../theme';
 import { Card, Label, Mono, Meter } from '../ui';
 import { TableShell, TableHead, Footnote } from '../StockTable';
@@ -7,6 +7,10 @@ import type { MarketData, Stock } from '../../lib/data';
 import { fmtPct, fmtPrice } from '../../lib/format';
 import { useSort, sortLabel } from '../../lib/sort';
 import type { SortSpec } from '../../lib/sort';
+import { useQueryParam } from '../../lib/router';
+import type { Route } from '../../lib/router';
+
+type Navigate = (target: string, opts?: { replace?: boolean }) => void;
 
 const GRID = '34px 1.1fr 1fr 0.8fr 0.7fr 1.3fr 1.1fr';
 
@@ -49,14 +53,19 @@ const BUCKETS: { key: string; label: string; color: string }[] = [
   { key: 'deep', label: 'Deep >40%', color: T.ink },
 ];
 
-export function DrawdownTab({ D, watch, toggle, onOpen }: {
+export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
   D: MarketData;
+  route: Route;
+  navigate: Navigate;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
 }) {
-  const [sector, setSector] = useState(ALL);
-  const [bucket, setBucket] = useState<string | null>(null);
+  const [sector, setSectorParam] = useQueryParam(route, navigate, 'sector', ALL);
+  const [bucketParam, setBucketParam] = useQueryParam(route, navigate, 'bucket', '');
+  const bucket = BUCKETS.some(b => b.key === bucketParam) ? bucketParam : null;
+  const setSector = (s: string) => setSectorParam(s);
+  const setBucket = (b: string | null) => setBucketParam(b || '');
 
   // Distribution + sector rollups always describe the sector in view, so the
   // cards above the table stay consistent with what is listed below.
