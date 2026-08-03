@@ -13,6 +13,7 @@ import { getDb, metaGet, metaSet } from './db.ts';
 import { config } from './config.ts';
 import { exchangeToken, loginUrl, KiteError } from './kite.ts';
 import { json, redirect, setCookie, type Ctx, type Router } from './router.ts';
+import { resetLiveAuthBlock } from './live.ts';
 
 const COOKIE = 'pulse_sid';
 const SESSION_TTL_H = 24; // Kite tokens die daily anyway
@@ -74,6 +75,7 @@ export function registerAuthRoutes(router: Router): void {
       await createSession(ctx, userId, s.access_token);
       await metaSet('kite_access_token', s.access_token);
       await metaSet('kite_access_token_at', new Date().toISOString());
+      resetLiveAuthBlock(); // fresh token — let the live poller retry at once
       redirect(ctx, config.appUrl);
     } catch (err) {
       const msg = err instanceof KiteError ? err.message : 'token_exchange_failed';
