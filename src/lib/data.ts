@@ -4,6 +4,8 @@ export interface Stock {
   sym: string; sector: string; price: number;
   chg1d: number; chg1w: number; distATH: number;
   isATH: boolean; is52: boolean; wkBreak: boolean;
+  /** First session of stored history — how far back "all-time" actually reaches. */
+  athSince?: string | null;
 }
 
 export interface Sector {
