@@ -279,8 +279,32 @@ export async function backfill(sessions: number): Promise<void> {
   const have = await db.all<{ sessions: number; oldest: string | null }>(
     'SELECT COUNT(DISTINCT date) AS sessions, MIN(date) AS oldest FROM daily_bars',
   );
-  const haveSessions = have[0]?.sessions ?? 0;
-  const oldest = have[0]?.oldest ?? null;
+  const totalSessions = have[0]?.sessions ?? 0;
+
+  /*
+   * Resume below the oldest session of the NEWEST contiguous run, not below
+   * MIN(date). History can be non-contiguous — a shallow initial backfill leaves
+   * a recent block, and deepening from MIN(date) would extend an old tail while
+   * the hole in the middle stays open. A gap also breaks corporate-action
+   * detection, which infers splits by comparing each close against the previous
+   * stored row: across a multi-year hole an ordinary price move looks like a split.
+   */
+  const allDates = (await db.all<{ date: string }>('SELECT DISTINCT date FROM daily_bars ORDER BY date DESC'))
+    .map(r => r.date);
+  let oldest: string | null = allDates[0] ?? null;
+  let contiguous = allDates.length ? 1 : 0;
+  for (let i = 1; i < allDates.length; i++) {
+    const gapDays = (Date.parse(allDates[i - 1]) - Date.parse(allDates[i])) / 86_400_000;
+    if (gapDays > 10) break; // holiday runs stay well under this; a real hole does not
+    oldest = allDates[i];
+    contiguous++;
+  }
+  // Only the contiguous run counts toward the target: sessions stranded on the
+  // far side of a hole would otherwise end the walk before the hole is filled.
+  const haveSessions = contiguous;
+  if (totalSessions > contiguous) {
+    console.log(`[backfill] ${totalSessions - contiguous} session(s) sit beyond a gap; filling from ${oldest} down`);
+  }
 
   Object.assign(backfillProgress, {
     running: true, done: haveSessions, target: sessions, currentDate: null,
