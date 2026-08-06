@@ -27,6 +27,55 @@ interface SymbolSeries {
 
 const WINDOW = 300; // sessions kept in memory (>= 252 for 52-week stats)
 
+/**
+ * Split-adjusted all-time high per symbol, over the FULL bar history.
+ *
+ * Deliberately not derived from the in-memory WINDOW: "all-time" must mean every
+ * session we hold, and loading 10y of bars per symbol into typed arrays just to
+ * take a max would cost hundreds of MB for no analytical gain.
+ *
+ * Raw highs are pre-split, so a symbol that split 1:10 has historical highs 10x
+ * the comparable price. We divide each bar by the product of every adjustment
+ * factor with an ex-date after it — the same convention as the in-window chain
+ * (adjusted = raw / k for bars before ex_date) — then take the max. Without this,
+ * split-adjusted names would sit permanently "90% below ATH".
+ */
+async function allTimeHighs(
+  factors: Map<string, { exDate: string; factor: number }[]>,
+): Promise<Map<string, { high: number; date: string; since: string }>> {
+  const db = await getDb();
+  const out = new Map<string, { high: number; date: string; since: string }>();
+
+  // Yearly buckets keep this a small aggregate scan rather than a full row dump:
+  // adjustment factors only ever apply at ex-date granularity, so per-year maxima
+  // are exact as long as we adjust each bucket by the factors that follow it.
+  const rows = await db.all<{ symbol: string; yr: string; high: number; hdate: string; first: string }>(
+    `SELECT symbol, substr(date, 1, 4) AS yr, MAX(high) AS high,
+            MIN(date) AS first,
+            substr(MAX(printf('%011.2f', high) || date), 12) AS hdate
+       FROM daily_bars
+      WHERE high > 0
+      GROUP BY symbol, yr`,
+  );
+
+  for (const r of rows) {
+    const acts = factors.get(r.symbol);
+    let adj = r.high;
+    if (acts?.length) {
+      // Any action with an ex-date after this bucket's high still applies to it.
+      for (const a of acts) if (a.exDate > r.hdate) adj /= a.factor;
+    }
+    const cur = out.get(r.symbol);
+    if (!cur) {
+      out.set(r.symbol, { high: adj, date: r.hdate, since: r.first });
+    } else {
+      if (adj > cur.high) { cur.high = adj; cur.date = r.hdate; }
+      if (r.first < cur.since) cur.since = r.first;
+    }
+  }
+  return out;
+}
+
 function ema(values: Float64Array, period: number, upto: number): Float64Array {
   const out = new Float64Array(upto + 1).fill(NaN);
   const k = 2 / (period + 1);
@@ -109,6 +158,7 @@ export async function runAnalytics(): Promise<string | null> {
 
   await detectCorporateActions();
   const factors = await loadFactors();
+  const aths = await allTimeHighs(factors);
 
   const secRows = await db.all<{ symbol: string; sector: string | null }>(
     'SELECT symbol, sector FROM instruments',
@@ -188,6 +238,8 @@ export async function runAnalytics(): Promise<string | null> {
   interface StockOut {
     sym: string; sector: string; price: number; chg1d: number; chg1w: number;
     distATH: number; dist52: number; isATH: boolean; is52: boolean; wkBreak: boolean;
+    /** First session of stored history for this symbol — the real span of "all-time". */
+    athSince: string | null;
     e10: number; e20: number; e50: number; e200: number;
     rs: number; volume: number; deliveryPct: number | null; turnover: number;
   }
@@ -247,14 +299,19 @@ export async function runAnalytics(): Promise<string | null> {
     const i5 = last - 5;
     const chg1w = i5 >= 0 && !Number.isNaN(c[i5]) && c[i5] > 0 ? (price / c[i5] - 1) * 100 : 0;
 
-    let athHigh = -Infinity, hi52 = -Infinity, lo52 = Infinity;
+    let hi52 = -Infinity, lo52 = Infinity;
     const from52 = Math.max(0, last - 251);
-    for (let t = 0; t <= last; t++) {
+    for (let t = from52; t <= last; t++) {
       const ht = h[t];
       if (Number.isNaN(ht)) continue;
-      if (ht > athHigh) athHigh = ht;
-      if (t >= from52) { if (ht > hi52) hi52 = ht; const lt = s.low[t]; if (lt < lo52) lo52 = lt; }
+      if (ht > hi52) hi52 = ht;
+      const lt = s.low[t];
+      if (lt < lo52) lo52 = lt;
     }
+
+    // All-time high spans the full stored history, not the in-memory window.
+    const athRec = aths.get(s.symbol);
+    const athHigh = Math.max(athRec?.high ?? 0, price); // a new high today is the ATH
     const distATH = athHigh > 0 ? Math.max(0, (athHigh - price) / athHigh * 100) : 0;
     const dist52 = hi52 > 0 ? Math.max(0, (hi52 - price) / hi52 * 100) : 0;
     const isATH = distATH < 0.4;
@@ -270,6 +327,7 @@ export async function runAnalytics(): Promise<string | null> {
     stocksOut.push({
       sym: s.symbol, sector: s.sector ?? 'Other', price,
       chg1d, chg1w, distATH, dist52, isATH, is52, wkBreak,
+      athSince: athRec?.since ?? null,
       e10: e10[last], e20: e20[last], e50: e50[last], e200: e200[last],
       rs, volume: v[last], deliveryPct: s.deliveryPct, turnover: v[last] * price,
     });

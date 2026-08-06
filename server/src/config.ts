@@ -41,8 +41,9 @@ export const config = {
   appUrl: env('APP_URL', 'http://localhost:5173'),
   /** Optional: postgres://... — falls back to SQLite in server/data/pulse.db. */
   databaseUrl: env('DATABASE_URL'),
-  /** Number of trading sessions of history to backfill on bootstrap. */
-  backfillSessions: Number(env('BACKFILL_SESSIONS', '270')),
+  /** Number of trading sessions of history to backfill on bootstrap.
+   *  ~2500 ≈ 10 years, which is what true all-time-high detection needs. */
+  backfillSessions: Number(env('BACKFILL_SESSIONS', '2500')),
   /** Dev only: when '1', GET /auth/dev-login creates a session without Kite. */
   devLogin: env('DEV_LOGIN', '') === '1',
   /** Marketaux news API token (marketaux.com). News features disabled if unset.

@@ -73,6 +73,7 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
         </div>
         <div style={{ fontSize: 12, color: T.faint, marginTop: 4 }}>
           {stock.distATH < 0.05 ? 'Trading at its all-time high' : stock.distATH.toFixed(1) + '% below all-time high'}
+          {stock.athSince && <span> · since {stock.athSince.slice(0, 4)}</span>}
         </div>
 
         <svg viewBox="0 0 380 150" preserveAspectRatio="none" style={{ width: '100%', height: 150, marginTop: 16, display: 'block', overflow: 'visible' }}>

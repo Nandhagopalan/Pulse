@@ -76,6 +76,7 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
     stocks: stocks.map(s => ({
       sym: s.sym, sector: s.sector, price: s.price, chg1d: s.chg1d, chg1w: s.chg1w,
       distATH: s.distATH, isATH: s.isATH, is52: s.is52, wkBreak: s.wkBreak,
+      athSince: s.athSince ?? null,
     })),
     sectors,
     universe: breadth.universe,

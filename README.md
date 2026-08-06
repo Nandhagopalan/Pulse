@@ -31,9 +31,12 @@ Zerodha Kite SSO.
    npm start
    ```
 
-   First launch bootstraps ~270 sessions of NSE history in the background
-   (bhavcopies, delivery data, index closes) and computes analytics; the UI
-   shows progress meanwhile.
+   First launch bootstraps ~2500 sessions (~10 years) of NSE history in the
+   background (bhavcopies, delivery data, index closes) and computes analytics;
+   the UI shows progress meanwhile. This takes a while on a cold database —
+   set `BACKFILL_SESSIONS` lower for a faster start, at the cost of shallower
+   all-time-high detection. Re-running the backfill with a larger value
+   deepens existing history rather than re-fetching it.
 
 3. **Frontend** (port 5173, proxies `/api` and `/auth` to the backend):
 

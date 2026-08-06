@@ -30,9 +30,41 @@ const num = (s: string | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Ingest the CM-UDiFF bhavcopy for one session. Returns rows ingested (0 = holiday/missing). */
+/**
+ * NSE replaced the legacy bhavcopy with the CM-UDiFF format in 2024; the legacy
+ * archive covers everything before it. Sessions on/after this date use UDiFF.
+ */
+const UDIFF_FROM = '2024-01-01';
+
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+/** Legacy archive path: /2020/AUG/cm06AUG2020bhav.csv.zip */
+function legacyBhavUrl(date: string): string {
+  const [y, m, d] = date.split('-');
+  const mon = MONTHS[Number(m) - 1];
+  return `${ARCHIVES}/content/historical/EQUITIES/${y}/${mon}/cm${d}${mon}${y}bhav.csv.zip`;
+}
+
+/**
+ * Normalise one bhavcopy row to the fields we store. The two formats use entirely
+ * different column names for the same data, so map both to a single shape.
+ */
+function bhavRow(r: Record<string, string>, udiff: boolean) {
+  return udiff
+    ? { sym: r.tckrsymb, series: r.sctysrs, isin: r.isin,
+        open: r.opnpric, high: r.hghpric, low: r.lwpric, close: r.clspric,
+        prev: r.prvsclsgpric, vol: r.ttltradgvol, val: r.ttltrfval, trades: r.ttlnboftxsexctd }
+    : { sym: r.symbol, series: r.series, isin: r.isin,
+        open: r.open, high: r.high, low: r.low, close: r.close,
+        prev: r.prevclose, vol: r.tottrdqty, val: r.tottrdval, trades: r.totaltrades };
+}
+
+/** Ingest the bhavcopy for one session. Returns rows ingested (0 = holiday/missing). */
 export async function ingestBhavcopy(date: string): Promise<number> {
-  const url = `${ARCHIVES}/content/cm/BhavCopy_NSE_CM_0_0_0_${compact(date)}_F_0000.csv.zip`;
+  const udiff = date >= UDIFF_FROM;
+  const url = udiff
+    ? `${ARCHIVES}/content/cm/BhavCopy_NSE_CM_0_0_0_${compact(date)}_F_0000.csv.zip`
+    : legacyBhavUrl(date);
   const buf = await fetchBytes(url);
   if (!buf) { await logIngest('bhavcopy', date, 'missing'); return 0; }
 
@@ -45,13 +77,14 @@ export async function ingestBhavcopy(date: string): Promise<number> {
   await db.exec('BEGIN');
   let count = 0;
   try {
-    for (const r of rows) {
-      const series = r.sctysrs;
+    for (const raw of rows) {
+      const r = bhavRow(raw, udiff);
+      const series = r.series;
       if (series !== 'EQ' && series !== 'BE' && series !== 'BZ') continue;
-      const sym = r.tckrsymb;
+      const sym = r.sym;
       if (!sym) continue;
-      const close = num(r.clspric);
-      const officialPrev = num(r.prvsclsgpric);
+      const close = num(r.close);
+      const officialPrev = num(r.prev);
       if (close <= 0) continue; // spec: null/zero close → treat as halted, keep last bar
 
       await db.run(
@@ -61,13 +94,16 @@ export async function ingestBhavcopy(date: string): Promise<number> {
            open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close,
            prev_close = excluded.prev_close, volume = excluded.volume,
            traded_value = excluded.traded_value, trades = excluded.trades`,
-        [sym, date, num(r.opnpric), num(r.hghpric), num(r.lwpric), close, officialPrev,
-         num(r.ttltradgvol), num(r.ttltrfval), num(r.ttlnboftxsexctd)],
+        [sym, date, num(r.open), num(r.high), num(r.low), close, officialPrev,
+         num(r.vol), num(r.val), num(r.trades)],
       );
 
+      // Backfill walks backwards through history: don't let an old session
+      // resurrect a delisted symbol as active, or overwrite a newer ISIN.
       await db.run(
         `INSERT INTO instruments (symbol, isin, series, active) VALUES (?, ?, ?, 1)
-         ON CONFLICT(symbol) DO UPDATE SET isin = excluded.isin, series = excluded.series, active = 1`,
+         ON CONFLICT(symbol) DO UPDATE SET isin = COALESCE(instruments.isin, excluded.isin),
+           series = COALESCE(instruments.series, excluded.series)`,
         [sym, r.isin ?? null, series],
       );
 
@@ -228,30 +264,82 @@ export const backfillProgress: BackfillProgress = {
 };
 
 /**
- * Bootstrap backfill: walk back from the latest session until `sessions` bhavcopies
- * are ingested (holidays are skipped). Also pulls index closes per session and the
- * delivery file for the most recent few sessions.
+ * Bootstrap / deepening backfill: ensure `sessions` bhavcopies of history exist.
+ *
+ * Walks back from the oldest session already stored (or from the latest available
+ * session on an empty DB), so re-running with a larger `sessions` extends history
+ * instead of re-fetching what we already have. Holidays are skipped. Index closes
+ * are pulled per session; the delivery file only for the most recent few, since
+ * MTO archives thin out and delivery % is only used for the latest session.
  */
 export async function backfill(sessions: number): Promise<void> {
   if (backfillProgress.running) return;
+
+  const db = await getDb();
+  const have = await db.all<{ sessions: number; oldest: string | null }>(
+    'SELECT COUNT(DISTINCT date) AS sessions, MIN(date) AS oldest FROM daily_bars',
+  );
+  const totalSessions = have[0]?.sessions ?? 0;
+
+  /*
+   * Resume below the oldest session of the NEWEST contiguous run, not below
+   * MIN(date). History can be non-contiguous — a shallow initial backfill leaves
+   * a recent block, and deepening from MIN(date) would extend an old tail while
+   * the hole in the middle stays open. A gap also breaks corporate-action
+   * detection, which infers splits by comparing each close against the previous
+   * stored row: across a multi-year hole an ordinary price move looks like a split.
+   */
+  const allDates = (await db.all<{ date: string }>('SELECT DISTINCT date FROM daily_bars ORDER BY date DESC'))
+    .map(r => r.date);
+  let oldest: string | null = allDates[0] ?? null;
+  let contiguous = allDates.length ? 1 : 0;
+  for (let i = 1; i < allDates.length; i++) {
+    const gapDays = (Date.parse(allDates[i - 1]) - Date.parse(allDates[i])) / 86_400_000;
+    if (gapDays > 10) break; // holiday runs stay well under this; a real hole does not
+    oldest = allDates[i];
+    contiguous++;
+  }
+  // Only the contiguous run counts toward the target: sessions stranded on the
+  // far side of a hole would otherwise end the walk before the hole is filled.
+  const haveSessions = contiguous;
+  if (totalSessions > contiguous) {
+    console.log(`[backfill] ${totalSessions - contiguous} session(s) sit beyond a gap; filling from ${oldest} down`);
+  }
+
   Object.assign(backfillProgress, {
-    running: true, done: 0, target: sessions, currentDate: null,
+    running: true, done: haveSessions, target: sessions, currentDate: null,
     startedAt: new Date().toISOString(), finishedAt: null, error: null,
   });
   try {
     await ingestIndexConstituents();
-    const latest = await latestAvailableSession();
-    if (!latest) throw new Error('could not locate any recent bhavcopy');
-    let d = latest;
-    let got = 0, scanned = 0;
-    while (got < sessions && scanned < sessions * 2 + 60) {
+
+    // Empty DB → start at the newest session. Existing DB → deepen below the oldest.
+    let latest: string | null = null;
+    let d: string;
+    if (oldest && haveSessions > 0) {
+      d = addDays(oldest, -1);
+    } else {
+      latest = await latestAvailableSession();
+      if (!latest) throw new Error('could not locate any recent bhavcopy');
+      d = latest;
+    }
+
+    if (haveSessions >= sessions) {
+      console.log(`[backfill] already have ${haveSessions} sessions (target ${sessions}) — nothing to do`);
+      backfillProgress.finishedAt = new Date().toISOString();
+      return;
+    }
+
+    let got = haveSessions, scanned = 0;
+    const toFetch = sessions - haveSessions;
+    while (got < sessions && scanned < toFetch * 2 + 60) {
       if (!isWeekend(d)) {
         backfillProgress.currentDate = d;
         try {
           const n = await ingestBhavcopy(d);
           if (n > 0) {
             await ingestIndexClose(d);
-            if (got < 5) await ingestDelivery(d);
+            if (latest && got < 5) await ingestDelivery(d);
             got++;
             backfillProgress.done = got;
           }
@@ -264,7 +352,7 @@ export async function backfill(sessions: number): Promise<void> {
       scanned++;
       d = addDays(d, -1);
     }
-    await metaSet('last_ingested_session', latest);
+    if (latest) await metaSet('last_ingested_session', latest);
     backfillProgress.finishedAt = new Date().toISOString();
   } catch (err) {
     backfillProgress.error = String(err);
