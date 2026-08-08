@@ -47,7 +47,8 @@ export function NewsTab({ D, route, navigate, watch }: {
     if (watchSyms.length === 0) { setState({ loading: false, enabled: true, articles: [], error: false }); return; }
     let cancelled = false;
     const load = () => {
-      fetchNews(watchSyms)
+      // No symbols passed: the server reads them off the account's watchlist.
+      fetchNews()
         .then(r => { if (!cancelled) setState({ loading: false, enabled: r.enabled, articles: r.articles, error: false }); })
         .catch(() => { if (!cancelled) setState(s => ({ ...s, loading: false, error: true })); });
     };

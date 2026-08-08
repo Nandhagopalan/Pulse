@@ -1,33 +1,34 @@
 /**
- * User SSO via Zerodha Kite Connect.
+ * User SSO via Google.
  *
- * Flow: /auth/kite/login → kite.zerodha.com login → redirect back to
- * KITE_REDIRECT_URL (?request_token=...) → exchange for access_token →
- * upsert user, create session row, set HttpOnly cookie.
+ * Flow: /auth/google/login → Google consent → redirect back to
+ * GOOGLE_REDIRECT_URL (?code=&state=) → exchange for an access token → read
+ * the profile → upsert user, create session row, set HttpOnly cookie.
  *
- * The freshest Kite access token is also stored in `meta` so backend jobs
- * (instrument sync, quotes) can reuse it. Kite tokens expire daily (~6 AM IST).
+ * Identity is the only thing sessions carry. Pulse holds no broker credential
+ * of any kind — see docs/multi_user_deployment_proposal.md.
  */
-import { randomBytes } from 'node:crypto';
-import { getDb, metaGet, metaSet } from './db.ts';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { getDb } from './db.ts';
 import { config } from './config.ts';
-import { exchangeToken, loginUrl, KiteError } from './kite.ts';
+import { exchangeCode, getProfile, loginUrl as googleLoginUrl, GoogleError } from './google.ts';
 import { json, redirect, setCookie, type Ctx, type Router } from './router.ts';
-import { resetLiveAuthBlock } from './live.ts';
 
 const COOKIE = 'pulse_sid';
-const SESSION_TTL_H = 24; // Kite tokens die daily anyway
+const STATE_COOKIE = 'pulse_oauth_state';
+const SESSION_TTL_H = 24 * 30; // identity only — nothing expires alongside it
+const STATE_TTL_S = 600;       // consent screens don't take ten minutes
 
 export async function resolveSession(ctx: Ctx): Promise<boolean> {
   const sid = ctx.cookies[COOKIE];
   if (!sid) return false;
   const db = await getDb();
-  const rows = await db.all<{ sid: string; user_id: string; access_token: string | null; expires_at: string }>(
-    'SELECT sid, user_id, access_token, expires_at FROM sessions WHERE sid = ?', [sid],
+  const rows = await db.all<{ sid: string; user_id: string; expires_at: string }>(
+    'SELECT sid, user_id, expires_at FROM sessions WHERE sid = ?', [sid],
   );
   const s = rows[0];
   if (!s || s.expires_at < new Date().toISOString()) return false;
-  ctx.session = { sid: s.sid, userId: s.user_id, accessToken: s.access_token };
+  ctx.session = { sid: s.sid, userId: s.user_id };
   return true;
 }
 
@@ -38,60 +39,93 @@ export function requireAuth(handler: (ctx: Ctx) => Promise<void> | void) {
   };
 }
 
-async function createSession(ctx: Ctx, userId: string, accessToken: string | null): Promise<void> {
+async function createSession(ctx: Ctx, userId: string): Promise<void> {
   const db = await getDb();
   const sid = randomBytes(32).toString('base64url');
   const now = new Date();
   const expires = new Date(now.getTime() + SESSION_TTL_H * 3600 * 1000);
-  await db.run('INSERT INTO sessions (sid, user_id, access_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)', [
-    sid, userId, accessToken, now.toISOString(), expires.toISOString(),
+  await db.run('INSERT INTO sessions (sid, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [
+    sid, userId, now.toISOString(), expires.toISOString(),
   ]);
   setCookie(ctx, COOKIE, sid, SESSION_TTL_H * 3600);
 }
 
-/** Most recent Kite access token across all logins — used by ingestion jobs. */
-export async function serviceAccessToken(): Promise<string | null> {
-  return metaGet('kite_access_token');
+/**
+ * Access control. Closed by default so a deployed instance is never
+ * accidentally open to every Google account on earth; see config.allowedEmails.
+ */
+function emailAllowed(email: string): boolean {
+  if (config.allowAllSignups) return true;
+  return config.allowedEmails.has(email.trim().toLowerCase());
+}
+
+/** Constant-time compare for the OAuth state token. */
+function sameToken(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 export function registerAuthRoutes(router: Router): void {
-  router.get('/auth/kite/login', ctx => {
-    redirect(ctx, loginUrl());
+  router.get('/auth/google/login', ctx => {
+    // One-time state, echoed back by Google and compared against the cookie —
+    // without it, an attacker can complete the flow in a victim's browser.
+    const state = randomBytes(16).toString('base64url');
+    setCookie(ctx, STATE_COOKIE, state, STATE_TTL_S);
+    redirect(ctx, googleLoginUrl(state));
   });
 
-  router.get('/auth/kite/callback', async ctx => {
-    const status = ctx.url.searchParams.get('status');
-    const requestToken = ctx.url.searchParams.get('request_token');
-    if (status === 'cancelled' || !requestToken) return redirect(ctx, config.appUrl + '?login=cancelled');
+  router.get('/auth/google/callback', async ctx => {
+    const fail = (reason: string) => {
+      setCookie(ctx, STATE_COOKIE, '', 0);
+      redirect(ctx, config.appUrl + '?login=error&reason=' + encodeURIComponent(reason));
+    };
+
+    if (ctx.url.searchParams.get('error')) return fail('cancelled');
+    const code = ctx.url.searchParams.get('code');
+    const state = ctx.url.searchParams.get('state');
+    const expected = ctx.cookies[STATE_COOKIE];
+    if (!code) return fail('missing_code');
+    if (!state || !expected || !sameToken(state, expected)) return fail('bad_state');
+
     try {
-      const s = await exchangeToken(requestToken);
+      const { access_token } = await exchangeCode(code);
+      const p = await getProfile(access_token);
+      // An unverified Google email is not proof of anything, and it is what the
+      // allowlist is keyed on.
+      if (!p.email || !p.email_verified) return fail('email_unverified');
+      if (!emailAllowed(p.email)) {
+        setCookie(ctx, STATE_COOKIE, '', 0);
+        return redirect(ctx, config.appUrl + '?login=denied');
+      }
+
       const db = await getDb();
-      const userId = 'kite:' + s.user_id;
+      // Keyed on the Google subject id, which is stable — emails get reassigned.
+      const userId = 'google:' + p.sub;
       await db.run(
-        `INSERT INTO users (id, provider, name, email, avatar, created_at) VALUES (?, 'kite', ?, ?, ?, ?)
+        `INSERT INTO users (id, provider, name, email, avatar, created_at) VALUES (?, 'google', ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, email = excluded.email, avatar = excluded.avatar`,
-        [userId, s.user_name, s.email, s.avatar_url, new Date().toISOString()],
+        [userId, p.name, p.email, p.picture, new Date().toISOString()],
       );
-      await createSession(ctx, userId, s.access_token);
-      await metaSet('kite_access_token', s.access_token);
-      await metaSet('kite_access_token_at', new Date().toISOString());
-      resetLiveAuthBlock(); // fresh token — let the live poller retry at once
+      await createSession(ctx, userId);
+      setCookie(ctx, STATE_COOKIE, '', 0);
       redirect(ctx, config.appUrl);
     } catch (err) {
-      const msg = err instanceof KiteError ? err.message : 'token_exchange_failed';
-      console.error('[auth] kite callback failed:', err);
-      redirect(ctx, config.appUrl + '?login=error&reason=' + encodeURIComponent(msg));
+      // Never surface the raw provider message to the browser — it can carry
+      // request details. The log gets the full error.
+      console.error('[auth] google callback failed:', err);
+      fail(err instanceof GoogleError ? 'google_' + err.status : 'sign_in_failed');
     }
   });
 
   router.get('/auth/me', async ctx => {
     if (!(await resolveSession(ctx))) return json(ctx, 401, { error: 'unauthorized' });
     const db = await getDb();
-    const rows = await db.all<{ id: string; name: string; email: string; avatar: string | null }>(
-      'SELECT id, name, email, avatar FROM users WHERE id = ?', [ctx.session!.userId],
+    const rows = await db.all<{ id: string; provider: string; name: string; email: string; avatar: string | null }>(
+      'SELECT id, provider, name, email, avatar FROM users WHERE id = ?', [ctx.session!.userId],
     );
     if (!rows[0]) return json(ctx, 401, { error: 'unauthorized' });
-    json(ctx, 200, { user: rows[0], kiteConnected: !!ctx.session!.accessToken });
+    json(ctx, 200, { user: rows[0] });
   });
 
   router.post('/auth/logout', async ctx => {
@@ -105,16 +139,16 @@ export function registerAuthRoutes(router: Router): void {
   });
 
   // Local development bypass (enable with DEV_LOGIN=1) — lets the terminal run
-  // on ingested data without a live Kite login. Never enable in production.
+  // on ingested data without a real sign-in. Never enable in production.
   if (config.devLogin) {
     router.get('/auth/dev-login', async ctx => {
       const db = await getDb();
       await db.run(
-        `INSERT INTO users (id, provider, name, email, avatar, created_at) VALUES ('dev:local', 'dev', 'Ikigai Trader', 'dev@local', NULL, ?)
+        `INSERT INTO users (id, provider, name, email, avatar, created_at) VALUES ('dev:local', 'dev', 'Local Dev', 'dev@local', NULL, ?)
          ON CONFLICT(id) DO NOTHING`,
         [new Date().toISOString()],
       );
-      await createSession(ctx, 'dev:local', null);
+      await createSession(ctx, 'dev:local');
       redirect(ctx, config.appUrl);
     });
   }

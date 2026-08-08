@@ -1,22 +1,12 @@
 import { useEffect, useMemo } from 'react';
 import { T, dirColor } from '../theme';
-import { Label, Mono, Meter, Tag } from './ui';
+import { Label, Mono, Meter } from './ui';
 import { stockTag } from './StockTable';
 import type { Stock } from '../lib/data';
-import { fundamentals, fmtCr } from '../lib/fundamentals';
 import { ohlc, candleChart } from '../lib/candles';
 import { fmtPct, fmtPrice } from '../lib/format';
 import type { Profile } from '../lib/profile';
 import { fmtInr } from '../lib/profile';
-
-function Row({ label, value, color, hint }: { label: string; value: string; color?: string; hint?: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid ' + T.borderSoft }}>
-      <span style={{ fontSize: 12.5, color: T.muted }}>{label}{hint && <span style={{ color: T.faint, fontSize: 11 }}> · {hint}</span>}</span>
-      <Mono size={12.5} color={color || T.ink} weight={600}>{value}</Mono>
-    </div>
-  );
-}
 
 export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
   stock: Stock;
@@ -31,7 +21,6 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const f = fundamentals(stock.sym, stock.sector, stock.price);
   const candles = useMemo(() => ohlc(stock.sym, stock.price, 2.2, 60), [stock.sym, stock.price]);
   const chart = useMemo(() => candleChart(candles, 380, 150, 6), [candles]);
 
@@ -45,8 +34,6 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
   const stopPct = (stop / stock.price - 1) * 100;
 
   const starred = !!watch[stock.sym];
-  const qualityLabel = f.quality >= 65 ? 'STRONG' : f.quality >= 40 ? 'DECENT' : 'WEAK';
-  const qualityColor = f.quality >= 65 ? T.up : f.quality >= 40 ? T.amber : T.down;
 
   return (
     <>
@@ -89,28 +76,6 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.amber }} />10 EMA {chart.ema10Last}</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.navy }} />50 EMA {chart.ema50Last}</span>
           <span style={{ color: T.faint }}>60 sessions · sample</span>
-        </div>
-
-        <div style={{ marginTop: 22 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Label>Fundamentals</Label>
-            <Tag color={qualityColor} bg={T.borderSoft}>{qualityLabel} · {f.quality}</Tag>
-          </div>
-          <div style={{ marginTop: 6 }}>
-            <Row label="Market cap" value={'₹' + fmtCr(f.mcap)} />
-            <Row label="P/E" value={f.pe.toFixed(1) + 'x'} />
-            <Row label="EPS" value={'₹' + f.eps.toFixed(1)} />
-            <Row label="ROE" value={f.roe.toFixed(1) + '%'} color={f.roe >= 15 ? T.up : T.ink} />
-            <Row label="ROCE" value={f.roce.toFixed(1) + '%'} color={f.roce >= 15 ? T.up : T.ink} />
-            <Row label="OPM" value={f.opm.toFixed(1) + '%'} />
-            <Row label="Sales growth" hint="3Y CAGR" value={fmtPct(f.salesG)} color={dirColor(f.salesG)} />
-            <Row label="Profit growth" hint="3Y CAGR" value={fmtPct(f.profitG)} color={dirColor(f.profitG)} />
-            <Row label="Debt / equity" value={f.de.toFixed(2)} color={f.de > 1.5 && stock.sector !== 'Banks' && stock.sector !== 'Fin Services' ? T.down : T.ink} />
-            <Row label="Promoter holding" value={f.promoter.toFixed(1) + '%'} />
-            <Row label="Promoter change" hint="QoQ" value={fmtPct(f.promoterChg)} color={dirColor(f.promoterChg)} />
-            <Row label="FII / DII holding" value={f.fii.toFixed(1) + '% / ' + f.dii.toFixed(1) + '%'} />
-            <Row label="Dividend yield" value={f.divYield.toFixed(2) + '%'} />
-          </div>
         </div>
 
         <div style={{ marginTop: 22, background: T.cardAlt, border: '1px solid ' + T.borderSoft, borderRadius: 12, padding: '16px 18px' }}>

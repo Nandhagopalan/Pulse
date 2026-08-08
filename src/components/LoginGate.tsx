@@ -1,31 +1,41 @@
 import ikigaiIcon from '../assets/ikigai-mark.jpeg';
 import { T } from '../theme';
-import { kiteLoginUrl } from '../lib/api';
+import { googleLoginUrl, loginErrorMessage } from '../lib/api';
 import type { BackfillStatus } from '../lib/api';
 import { Mono } from './ui';
 
 export function LoginGate({ onDemo }: { onDemo: () => void }) {
+  const error = loginErrorMessage(window.location.search);
   return (
     <div style={{ minHeight: '100vh', background: T.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ width: 380, background: T.card, border: '1px solid ' + T.border, borderRadius: 18, boxShadow: T.shadow, padding: '40px 36px', textAlign: 'center' }}>
         <img src={ikigaiIcon} alt="Ikigai" style={{ height: 64, mixBlendMode: 'multiply' }} />
         <div style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 600, color: T.ink, marginTop: 14 }}>Pulse</div>
-        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.24em', color: T.faint, marginTop: 6 }}>IKIGAI TRADER · SWING TERMINAL</div>
+        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.24em', color: T.faint, marginTop: 6 }}>SWING TERMINAL · NSE</div>
 
         <div style={{ height: 1, background: T.borderSoft, margin: '28px 0' }} />
 
         <div style={{ fontSize: 13.5, color: T.muted, lineHeight: 1.6 }}>
-          Sign in with your Zerodha account to load live NSE market breadth, sector strength and swing setups.
+          Sign in to load NSE market breadth, sector strength and swing setups.
         </div>
 
+        {error && (
+          <div style={{
+            marginTop: 16, padding: '10px 12px', borderRadius: 10, textAlign: 'left',
+            background: T.cardAlt, border: '1px solid ' + T.border, fontSize: 12.5, color: T.ink, lineHeight: 1.5,
+          }}>
+            {error}
+          </div>
+        )}
+
         <a
-          href={kiteLoginUrl}
+          href={googleLoginUrl}
           style={{
             display: 'block', marginTop: 22, padding: '13px 0', borderRadius: 12, textDecoration: 'none',
             background: T.ink, color: '#F4F2EC', fontFamily: T.sans, fontSize: 14.5, fontWeight: 600,
           }}
         >
-          Sign in with Zerodha Kite
+          Sign in with Google
         </a>
 
         <button

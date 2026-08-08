@@ -2,27 +2,38 @@
 
 Swing-trader terminal for NSE (India): market breadth, sector strength, highs/breakouts,
 drawdown structure and watchlists — computed from official exchange data and gated behind
-Zerodha Kite SSO.
+Google sign-in.
+
+Every price in Pulse is an **end-of-day close**. There is no intraday feed and no broker
+integration; the numbers advance once a night when the pipeline runs.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `src/` | React terminal UI (Breadth, Charts, Sectors, Highs, Drawdown, Watchlist tabs) |
-| `server/` | Backend: Kite Connect SSO, REST API, live quotes — see [server/README.md](server/README.md) |
+| `server/` | Backend: Google SSO + REST API — see [server/README.md](server/README.md) |
 | `pipeline/` | Python batch pipeline: NSE → R2 Parquet lake → DuckDB analytics → Supabase — see [pipeline/README.md](pipeline/README.md) |
+| `docs/` | [Multi-user deployment proposal](docs/multi_user_deployment_proposal.md) — the plan this is being built against |
 
 ## Quick start
 
-1. **Credentials** — put your Kite Connect app keys in `.env.local` at the repo root:
+1. **Credentials** — create an OAuth client at
+   [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services →
+   Credentials → *OAuth client ID* → Web application, and add
+   `http://localhost:5173/auth/google/callback` as an Authorized redirect URI.
+   Then put the keys in `.env.local` at the repo root:
 
    ```
-   ZERODHA_API_KEY="..."
-   ZERODHA_API_SECRET="..."
+   GOOGLE_CLIENT_ID="..."
+   GOOGLE_CLIENT_SECRET="..."
+   ALLOWED_EMAILS="you@example.com, teammate@example.com"
    ```
 
-   On [developers.kite.trade](https://developers.kite.trade) set the app's Redirect URL to
-   `http://localhost:5173/auth/kite/callback`.
+   `ALLOWED_EMAILS` is the access list, and it is **closed by default** — an address
+   that is not on it gets bounced at the gate. Set `ALLOW_ALL_SIGNUPS=1` to let any
+   Google account in. In a non-local deployment also set `GOOGLE_REDIRECT_URL` and
+   `APP_URL` to the real domain, and register that redirect URI on the OAuth client.
 
 2. **Backend** (port 8000, needs Node ≥ 23):
 
@@ -46,16 +57,15 @@ Zerodha Kite SSO.
    npm run dev
    ```
 
-Sign in with Zerodha at the gate. Kite access tokens expire daily, so expect one
-login per trading day — the same token powers live index quotes during market hours.
-If the backend is unreachable the UI falls back to clearly-badged demo data.
+Sign in with Google at the gate; sessions last 30 days. If the backend is unreachable
+the UI falls back to clearly-badged demo data.
 
 ## Architecture
 
 ```
 NSE archives ──► Cloudflare R2 ──► DuckDB ──► Supabase ──► Node API ──► React UI
-  bhavcopy       Parquet lake      analytics   ~2.5k rows    + Kite SSO
-  (per session)  19 yrs, ~8M bars  (nightly)   (a few MB)    + live quotes
+  bhavcopy       Parquet lake      analytics   ~2.5k rows    + Google SSO
+  (per session)  19 yrs, ~8M bars  (nightly)   (a few MB)
 ```
 
 Storage is split because the two halves have opposite needs. Nineteen years of
@@ -68,7 +78,7 @@ scans the Parquet on R2, emits ~2,500 rows, and exits. Nothing to host.
 
 The batch half lives in [pipeline/](pipeline/) and runs nightly on GitHub Actions
 at 19:45 IST. The Node server no longer ingests when `SUPABASE_DB_URL` is set —
-it serves the API, Kite SSO, and live index quotes during market hours.
+it serves the API and Google SSO, nothing more.
 
 ### Corporate actions
 

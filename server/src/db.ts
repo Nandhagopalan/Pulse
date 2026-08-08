@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS sessions (
   sid TEXT PRIMARY KEY,
-  user_id TEXT, access_token TEXT,
+  user_id TEXT,
   created_at TEXT, expires_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -87,9 +87,22 @@ CREATE TABLE IF NOT EXISTS news_articles (
   PRIMARY KEY (id, symbol)   -- one article can be tagged to several watchlist symbols
 );
 CREATE INDEX IF NOT EXISTS idx_news_symbol_date ON news_articles(symbol, published_at DESC);
-CREATE TABLE IF NOT EXISTS watched_symbols (
-  symbol TEXT PRIMARY KEY,
-  last_seen TEXT             -- ISO — last time a client asked for this symbol's news
+CREATE TABLE IF NOT EXISTS news_interest (
+  user_id TEXT, symbol TEXT,
+  last_seen TEXT,            -- ISO — last time this user asked for the symbol's news
+  PRIMARY KEY (user_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_news_interest_seen ON news_interest(last_seen);
+CREATE TABLE IF NOT EXISTS user_watchlist (
+  user_id TEXT, symbol TEXT,
+  added_at TEXT,
+  PRIMARY KEY (user_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_user_watchlist_user ON user_watchlist(user_id);
+CREATE TABLE IF NOT EXISTS user_prefs (
+  user_id TEXT PRIMARY KEY,
+  data TEXT,                 -- JSON: capital, riskPct, maxPos
+  updated_at TEXT
 );
 `;
 

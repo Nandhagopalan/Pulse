@@ -2,12 +2,11 @@ import type { ReactNode } from 'react';
 import { T, dirColor } from '../theme';
 import { Mono, Tag } from './ui';
 import type { Stock } from '../lib/data';
-import { fundamentals } from '../lib/fundamentals';
 import { fmtPct, fmtPrice } from '../lib/format';
 import { useSort, sortLabel } from '../lib/sort';
 import type { SortSpec, SortState } from '../lib/sort';
 
-const GRID = '34px 1.1fr 1.1fr 0.85fr 0.6fr 0.6fr 0.6fr 0.6fr 0.75fr 0.85fr';
+const GRID = '34px 1.1fr 1.1fr 0.85fr 0.6fr 0.6fr 0.75fr 0.85fr';
 
 export function stockTag(s: Stock) {
   if (s.isATH) return <Tag color={T.card} bg={T.ink}>ATH</Tag>;
@@ -82,8 +81,6 @@ const COLS: HeadCol[] = [
   { key: 'price', label: 'Price', align: 'right' },
   { key: 'chg1d', label: '1D %', align: 'right' },
   { key: 'chg1w', label: '1W %', align: 'right' },
-  { key: 'pe', label: 'P/E', align: 'right' },
-  { key: 'roe', label: 'ROE', align: 'right' },
   { key: 'distATH', label: 'From ATH', align: 'right' },
   { key: 'tag', label: 'Tag', align: 'right' },
 ];
@@ -96,8 +93,6 @@ const SPECS: SortSpec<Stock>[] = [
   { key: 'price', value: s => s.price },
   { key: 'chg1d', value: s => s.chg1d },
   { key: 'chg1w', value: s => s.chg1w },
-  { key: 'pe', value: s => fundamentals(s.sym, s.sector, s.price).pe, first: 'asc' },
-  { key: 'roe', value: s => fundamentals(s.sym, s.sector, s.price).roe },
   { key: 'distATH', value: s => s.distATH, first: 'asc' },
   { key: 'tag', value: s => tagRank(s) },
 ];
@@ -118,7 +113,6 @@ export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSor
     <TableShell>
       <TableHead grid={GRID} cols={COLS} sort={sort} onSort={onSort} />
       {sorted.map(s => {
-        const f = fundamentals(s.sym, s.sector, s.price);
         const starred = !!watch[s.sym];
         return (
           <div
@@ -134,8 +128,6 @@ export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSor
             <div style={{ textAlign: 'right' }}><Mono size={12.5}>{fmtPrice(s.price)}</Mono></div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5} color={dirColor(s.chg1d)}>{fmtPct(s.chg1d)}</Mono></div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5} color={dirColor(s.chg1w)}>{fmtPct(s.chg1w)}</Mono></div>
-            <div style={{ textAlign: 'right' }}><Mono size={12.5} color={T.muted}>{f.pe.toFixed(0)}x</Mono></div>
-            <div style={{ textAlign: 'right' }}><Mono size={12.5} color={f.roe >= 15 ? T.up : T.muted}>{f.roe.toFixed(0)}%</Mono></div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5} color={T.muted}>{s.distATH < 0.05 ? '0.0%' : '-' + s.distATH.toFixed(1) + '%'}</Mono></div>
             <div style={{ textAlign: 'right' }}>{stockTag(s)}</div>
           </div>

@@ -1,17 +1,17 @@
 /**
  * IST-aware operational schedule (per the sourcing spec):
  *   08:30  master/constituent sync (Mondays) + FII/DII retry
- *   09:15–15:30  live index quote polling (20s cadence)
  *   18:45  EOD ingest chain (bhavcopy, MTO, index closes, FII/DII)
  *   19:30  analytics engine (runs automatically right after a successful ingest)
  * Plus boot-time catch-up: bootstrap backfill on an empty DB, or re-ingest any
  * missed session, then recompute analytics if stale.
+ *
+ * Nothing here runs intraday any more — Pulse is an end-of-day product.
  */
 import { config } from './config.ts';
 import { metaGet } from './db.ts';
 import { backfill, backfillProgress, ingestFiiDii, ingestIndexConstituents, latestAvailableSession, runEodIngest } from './ingest/nse.ts';
 import { runAnalytics } from './analytics/engine.ts';
-import { pollIndexQuotes, isMarketOpen } from './live.ts';
 import { refreshWatchlistNews, newsEnabled } from './news.ts';
 import { istMinutes, istNow, istToday, isWeekend } from './util.ts';
 
@@ -36,8 +36,6 @@ async function tick(): Promise<void> {
   const today = istToday();
   const mins = istMinutes();
   const weekday = !isWeekend(today);
-
-  if (isMarketOpen()) await pollIndexQuotes();
 
   // Watchlist news refresh (independent of the EOD lock; own interval).
   if (newsEnabled()) {
@@ -111,9 +109,10 @@ export async function bootCatchup(): Promise<void> {
 }
 
 export function startScheduler(): void {
-  const liveInterval = 20_000;
-  setInterval(() => { void tick(); }, liveInterval);
-  console.log('[scheduler] started (20s tick, IST schedule)');
+  // A minute is ample: the finest-grained thing left is "start the EOD chain
+  // once the bhavcopy shows up some time after 18:45 IST".
+  setInterval(() => { void tick(); }, 60_000);
+  console.log('[scheduler] started (60s tick, IST schedule)');
 }
 
 export { backfillProgress };

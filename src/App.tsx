@@ -4,7 +4,7 @@ import { areaLine } from './lib/svg';
 import { useProfile } from './lib/profile';
 import { useRoute, buildHash } from './lib/router';
 import { useMarket } from './lib/useMarket';
-import { logout } from './lib/api';
+import { addToWatchlist, fetchWatchlist, importWatchlist, logout, removeFromWatchlist } from './lib/api';
 import { LoginGate, BootstrapScreen } from './components/LoginGate';
 import { Mono, Sparkline, ghostBtn, inkBtn, inputStyle } from './components/ui';
 import { Sidebar, type NavItem } from './components/Sidebar';
@@ -52,22 +52,57 @@ const DEFAULT_CHART_SYM = 'NIFTY 50';
 const ALL_SECTORS = 'All sectors';
 const DEFAULT_BREADTH_RANGE: BreadthRange = '1m';
 
-function useWatchlist() {
+// Watchlists used to live in localStorage, before accounts existed. The first
+// authenticated load migrates whatever is still there onto the account, then
+// clears it so the browser copy can never drift from the server's.
+const LEGACY_WATCHLIST_KEY = 'pulse-watchlist';
+
+const toWatchMap = (symbols: string[]): Record<string, true> =>
+  Object.fromEntries(symbols.map(s => [s, true as const]));
+
+function readLegacyWatchlist(): string[] {
+  try {
+    const raw = localStorage.getItem(LEGACY_WATCHLIST_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+function useWatchlist(authed: boolean) {
   const [watch, setWatch] = useState<Record<string, true>>({});
+
   useEffect(() => {
-    try {
-      const w = localStorage.getItem('pulse-watchlist');
-      if (w) setWatch(JSON.parse(w));
-    } catch { /* ignore corrupt storage */ }
-  }, []);
+    if (!authed) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const legacy = readLegacyWatchlist();
+        const res = legacy.length ? await importWatchlist(legacy) : await fetchWatchlist();
+        try { localStorage.removeItem(LEGACY_WATCHLIST_KEY); } catch { /* ignore */ }
+        if (!cancelled) setWatch(toWatchMap(res.symbols));
+      } catch { /* leave empty — the watchlist tab shows its empty state */ }
+    })();
+    return () => { cancelled = true; };
+  }, [authed]);
+
   const toggle = (sym: string) => {
+    const starred = !!watch[sym];
+    const previous = watch;
+    // Optimistic: starring should feel instant, and the server's reply is the
+    // authority a moment later.
     setWatch(prev => {
       const next = { ...prev };
-      if (next[sym]) delete next[sym]; else next[sym] = true;
-      try { localStorage.setItem('pulse-watchlist', JSON.stringify(next)); } catch { /* ignore */ }
+      if (starred) delete next[sym]; else next[sym] = true;
       return next;
     });
+    (starred ? removeFromWatchlist(sym) : addToWatchlist(sym))
+      .then(res => setWatch(toWatchMap(res.symbols)))
+      .catch(() => setWatch(previous));
   };
+
   return { watch, toggle };
 }
 
@@ -105,10 +140,10 @@ export default function App() {
   const [quoteDraft, setQuoteDraft] = useState('');
 
   const { route, navigate } = useRoute();
-  const { watch, toggle } = useWatchlist();
   const { quoteText, shuffle, addQuote } = useQuotes();
-  const { profile, update } = useProfile();
   const market = useMarket();
+  const { watch, toggle } = useWatchlist(market.auth === 'authed');
+  const { profile, update } = useProfile(market.user);
 
   // The URL is the single source of truth for which page is showing and how it
   // is filtered, so every view is reachable by link and survives a reload.

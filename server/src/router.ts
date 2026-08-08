@@ -8,7 +8,7 @@ export interface Ctx {
   params: Record<string, string>;
   cookies: Record<string, string>;
   /** Set by auth middleware when a valid session exists. */
-  session?: { sid: string; userId: string; accessToken: string | null };
+  session?: { sid: string; userId: string };
 }
 
 type Handler = (ctx: Ctx) => Promise<void> | void;
@@ -23,6 +23,7 @@ export class Router {
   }
   get(path: string, handler: Handler) { this.on('GET', path, handler); }
   post(path: string, handler: Handler) { this.on('POST', path, handler); }
+  del(path: string, handler: Handler) { this.on('DELETE', path, handler); }
 
   async dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -56,6 +57,26 @@ function parseCookies(header: string): Record<string, string> {
     if (eq > 0) out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
   }
   return out;
+}
+
+/**
+ * Read a JSON request body. Capped so an oversized upload cannot be buffered
+ * into memory; returns null on anything unparseable.
+ */
+export async function readJson<T>(ctx: Ctx, maxBytes = 64 * 1024): Promise<T | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of ctx.req) {
+    size += (chunk as Buffer).length;
+    if (size > maxBytes) return null;
+    chunks.push(chunk as Buffer);
+  }
+  if (!chunks.length) return null;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function json(ctx: Ctx, status: number, body: unknown): void {

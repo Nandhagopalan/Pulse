@@ -32,6 +32,13 @@ export function isWeekend(iso: string): boolean {
   return dow === 0 || dow === 6;
 }
 
+/** NSE equity session: Mon–Fri, 09:15–15:30 IST. */
+export function isMarketOpen(): boolean {
+  const dow = istNow().getUTCDay();
+  const mins = istMinutes();
+  return dow >= 1 && dow <= 5 && mins >= 555 && mins <= 930;
+}
+
 /** YYYY-MM-DD → YYYYMMDD */
 export function compact(iso: string): string {
   return iso.replaceAll('-', '');

@@ -5,7 +5,6 @@ import type { MarketData } from '../../lib/data';
 import { areaLine, barsBottom } from '../../lib/svg';
 import { ohlc, candleChart, type Candle } from '../../lib/candles';
 import { fetchCandles, type ApiCandle } from '../../lib/api';
-import { isMarketOpen } from '../../lib/market';
 
 function fmtAxisDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00Z');
@@ -37,21 +36,9 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
     ? realCandles.map(c => ({ o: c.o, c: c.c, h: c.h, l: c.l }))
     : ohlc(sel.key, sel.last, sel.vol, 90);
 
-  // Live "today" bar: during market hours, indices carry a live-overlaid value on
-  // D.indices (server pushes the Kite quote onto .value). When that live price
-  // differs from the last EOD close, append a forming candle so the chart reflects
-  // today's action. It refreshes on the 30s summary tick that updates `sel.last`.
-  const lastEod = baseCandles[baseCandles.length - 1];
-  const isIndex = sel.sub === 'Index';
-  const liveActive = isIndex && isMarketOpen() && Math.abs(sel.last - lastEod.c) > 1e-6;
-  const candles: Candle[] = liveActive
-    ? [...baseCandles, {
-        o: lastEod.c,
-        c: sel.last,
-        h: Math.max(lastEod.c, sel.last),
-        l: Math.min(lastEod.c, sel.last),
-      }]
-    : baseCandles;
+  // Every series ends on the last completed session — Pulse has no intraday
+  // feed, so there is no forming candle to append.
+  const candles: Candle[] = baseCandles;
 
   const chart = candleChart(candles, 900, 336, 8);
   const prevC = candles[candles.length - 2].c;
@@ -85,11 +72,7 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
             <Mono size={21} weight={600}>{sel.last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Mono>
             <Mono size={14} weight={600} color={dirColor(dayChg)}>{(dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%'}</Mono>
-            {liveActive
-              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', color: T.up, background: T.upSoft, borderRadius: 99, padding: '3px 10px' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: T.up, display: 'block' }} />LIVE
-                </span>
-              : <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, background: T.borderSoft, borderRadius: 99, padding: '3px 10px' }}>{sel.sub}</span>}
+            <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, background: T.borderSoft, borderRadius: 99, padding: '3px 10px' }}>{sel.sub}</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -138,7 +121,6 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}><span style={{ width: 14, height: 2, background: T.navy, display: 'block' }} />50 EMA</span>
           <span style={{ fontSize: 12, color: T.faint }}>
             {baseCandles.length} sessions · daily candles · {realCandles ? 'NSE EOD (adjusted)' : 'sample data'}
-            {liveActive && <span style={{ color: T.up }}> · +1 live intraday bar</span>}
           </span>
         </div>
       </Card>

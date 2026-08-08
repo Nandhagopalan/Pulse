@@ -2,7 +2,6 @@ import { T, dirColor } from '../../theme';
 import { Card, Label } from '../ui';
 import { StockTable } from '../StockTable';
 import type { MarketData } from '../../lib/data';
-import { fundamentals } from '../../lib/fundamentals';
 import type { Profile } from '../../lib/profile';
 import { fmtInr } from '../../lib/profile';
 
@@ -26,9 +25,9 @@ export function WatchTab({ D, watch, toggle, onOpen, profile }: {
     );
   }
 
-  const avgRoe = rows.reduce((a, s) => a + fundamentals(s.sym, s.sector, s.price).roe, 0) / rows.length;
-  const avgPe = rows.reduce((a, s) => a + fundamentals(s.sym, s.sector, s.price).pe, 0) / rows.length;
   const avg1w = rows.reduce((a, s) => a + s.chg1w, 0) / rows.length;
+  const avgFromAth = rows.reduce((a, s) => a + s.distATH, 0) / rows.length;
+  const atHighs = rows.filter(s => s.isATH || s.is52).length;
   const slots = profile.maxPos - rows.length;
 
   return (
@@ -37,8 +36,8 @@ export function WatchTab({ D, watch, toggle, onOpen, profile }: {
         {[
           { label: 'Tracked', value: String(rows.length), color: T.ink, sub: slots >= 0 ? slots + ' slots free of ' + profile.maxPos : Math.abs(slots) + ' over your ' + profile.maxPos + ' max' },
           { label: 'Avg 1W move', value: (avg1w >= 0 ? '+' : '') + avg1w.toFixed(1) + '%', color: dirColor(avg1w), sub: 'across watchlist' },
-          { label: 'Avg ROE', value: avgRoe.toFixed(1) + '%', color: avgRoe >= 15 ? T.up : T.amber, sub: 'quality check' },
-          { label: 'Risk / trade', value: fmtInr(profile.capital * profile.riskPct / 100), color: T.amber, sub: avgPe.toFixed(0) + 'x avg P/E · ' + profile.riskPct + '% of capital' },
+          { label: 'Avg from ATH', value: '-' + avgFromAth.toFixed(1) + '%', color: avgFromAth < 10 ? T.up : T.amber, sub: atHighs + ' at 52w or all-time highs' },
+          { label: 'Risk / trade', value: fmtInr(profile.capital * profile.riskPct / 100), color: T.amber, sub: profile.riskPct + '% of capital' },
         ].map(c => (
           <Card key={c.label} style={{ padding: '14px 18px' }}>
             <Label>{c.label}</Label>
@@ -53,7 +52,7 @@ export function WatchTab({ D, watch, toggle, onOpen, profile }: {
         watch={watch}
         toggle={toggle}
         onOpen={onOpen}
-        footnote="Click a row for fundamentals and a position plan sized to your profile."
+        footnote="Click a row for a position plan sized to your profile."
       />
     </div>
   );

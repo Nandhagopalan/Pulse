@@ -2,9 +2,9 @@
 import { config } from './config.ts';
 import { getDb, metaGet } from './db.ts';
 import { requireAuth } from './auth.ts';
-import { json, type Router } from './router.ts';
+import { json, readJson, type Router } from './router.ts';
 import { backfillProgress } from './ingest/nse.ts';
-import { liveQuote, isMarketOpen } from './live.ts';
+import { isMarketOpen } from './util.ts';
 import { getCachedNews, registerWatched, newsEnabled, fetchNewsBatch } from './news.ts';
 
 /** Display name → name used in the NSE all-indices close file (uppercased). */
@@ -22,6 +22,25 @@ function padTo(arr: number[], len: number): number[] {
   return [...new Array(len - arr.length).fill(0), ...arr];
 }
 
+/** Cap on watchlist size — a swing book, not a screener dump. */
+const MAX_WATCHLIST = 200;
+
+/** NSE tickers are uppercase alphanumerics plus `&`, `-` and `.` (e.g. M&M, BAJAJ-AUTO). */
+const SYMBOL_RE = /^[A-Z0-9&.-]{1,24}$/;
+
+function cleanSymbol(raw: string): string | null {
+  const sym = raw.trim().toUpperCase();
+  return SYMBOL_RE.test(sym) ? sym : null;
+}
+
+async function watchlistFor(userId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.all<{ symbol: string }>(
+    'SELECT symbol FROM user_watchlist WHERE user_id = ? ORDER BY symbol', [userId],
+  );
+  return rows.map(r => r.symbol);
+}
+
 async function buildSummary(): Promise<Record<string, unknown> | null> {
   const db = await getDb();
   const bRows = await db.all<{ date: string; data: string }>(
@@ -37,7 +56,8 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
   const sectorRows = await db.all<{ data: string }>('SELECT data FROM sector_scores WHERE date = ?', [date]);
   const sectors = sectorRows.map(r => JSON.parse(r.data)).sort((a, b) => b.score - a.score);
 
-  // Index strip: last 32 closes per index + live overlay during market hours.
+  // Index strip: last 32 closes per index. Every price Pulse serves is an
+  // end-of-day close — there is no intraday feed behind any of this.
   const indices: { name: string; value: number; chgPct: number; pts: number[] }[] = [];
   for (const [display, fileName] of INDEX_STRIP) {
     const rows = await db.all<{ date: string; close: number }>(
@@ -45,14 +65,8 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
     );
     if (!rows.length) continue;
     const pts = rows.map(r => r.close).reverse();
-    let value = pts[pts.length - 1];
-    let prev = pts.length > 1 ? pts[pts.length - 2] : value;
-    const live = liveQuote(display);
-    if (live && isMarketOpen()) {
-      prev = value;          // last EOD close becomes the reference
-      value = live.last;
-      pts.push(live.last);
-    }
+    const value = pts[pts.length - 1];
+    const prev = pts.length > 1 ? pts[pts.length - 2] : value;
     indices.push({
       name: display, value,
       chgPct: prev > 0 ? (value / prev - 1) * 100 : 0,
@@ -172,27 +186,111 @@ export function registerApiRoutes(router: Router): void {
     json(ctx, 200, { sym, candles });
   }));
 
-  router.get('/api/news', requireAuth(async ctx => {
-    const raw = (ctx.url.searchParams.get('symbols') ?? '').trim();
-    const symbols = [...new Set(
-      raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
-    )].slice(0, 50);
+  router.get('/api/watchlist', requireAuth(async ctx => {
+    json(ctx, 200, { symbols: await watchlistFor(ctx.session!.userId) });
+  }));
 
+  router.post('/api/watchlist/:sym', requireAuth(async ctx => {
+    const sym = cleanSymbol(ctx.params.sym);
+    if (!sym) return json(ctx, 400, { error: 'bad_symbol' });
+    const userId = ctx.session!.userId;
+    const db = await getDb();
+    const current = await watchlistFor(userId);
+    if (current.length >= MAX_WATCHLIST && !current.includes(sym)) {
+      return json(ctx, 409, { error: 'watchlist_full', limit: MAX_WATCHLIST });
+    }
+    await db.run(
+      `INSERT INTO user_watchlist (user_id, symbol, added_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, symbol) DO NOTHING`,
+      [userId, sym, new Date().toISOString()],
+    );
+    json(ctx, 200, { symbols: await watchlistFor(userId) });
+  }));
+
+  router.del('/api/watchlist/:sym', requireAuth(async ctx => {
+    const sym = cleanSymbol(ctx.params.sym);
+    if (!sym) return json(ctx, 400, { error: 'bad_symbol' });
+    const userId = ctx.session!.userId;
+    const db = await getDb();
+    await db.run('DELETE FROM user_watchlist WHERE user_id = ? AND symbol = ?', [userId, sym]);
+    json(ctx, 200, { symbols: await watchlistFor(userId) });
+  }));
+
+  /**
+   * One-shot import of a browser-local watchlist from before watchlists were
+   * server-side. Additive — it never removes anything already on the account.
+   */
+  router.post('/api/watchlist/import', requireAuth(async ctx => {
+    const body = await readJson<{ symbols?: unknown }>(ctx);
+    const raw = Array.isArray(body?.symbols) ? body.symbols : [];
+    const symbols = [...new Set(
+      raw.filter((s): s is string => typeof s === 'string').map(cleanSymbol).filter((s): s is string => !!s),
+    )];
+    const userId = ctx.session!.userId;
+    const db = await getDb();
+    const now = new Date().toISOString();
+    const existing = await watchlistFor(userId);
+    const room = Math.max(0, MAX_WATCHLIST - existing.length);
+    for (const sym of symbols.slice(0, room)) {
+      await db.run(
+        `INSERT INTO user_watchlist (user_id, symbol, added_at) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, symbol) DO NOTHING`,
+        [userId, sym, now],
+      );
+    }
+    json(ctx, 200, { symbols: await watchlistFor(userId) });
+  }));
+
+  router.get('/api/prefs', requireAuth(async ctx => {
+    const db = await getDb();
+    const rows = await db.all<{ data: string }>(
+      'SELECT data FROM user_prefs WHERE user_id = ?', [ctx.session!.userId],
+    );
+    let prefs: unknown = null;
+    if (rows[0]) { try { prefs = JSON.parse(rows[0].data); } catch { prefs = null; } }
+    json(ctx, 200, { prefs });
+  }));
+
+  router.post('/api/prefs', requireAuth(async ctx => {
+    const body = await readJson<Record<string, unknown>>(ctx);
+    if (!body || typeof body !== 'object') return json(ctx, 400, { error: 'bad_body' });
+    // Only the known numeric fields are stored — this blob is echoed back to the
+    // client, so it must never become a place to park arbitrary content.
+    const num = (v: unknown, lo: number, hi: number, dflt: number) =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+    const prefs = {
+      capital: num(body.capital, 0, 1e12, 1000000),
+      riskPct: num(body.riskPct, 0, 100, 1),
+      maxPos: Math.round(num(body.maxPos, 1, 100, 6)),
+    };
+    const db = await getDb();
+    await db.run(
+      `INSERT INTO user_prefs (user_id, data, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+      [ctx.session!.userId, JSON.stringify(prefs), new Date().toISOString()],
+    );
+    json(ctx, 200, { prefs });
+  }));
+
+  router.get('/api/news', requireAuth(async ctx => {
     if (!newsEnabled()) return json(ctx, 200, { enabled: false, articles: [] });
+
+    // Symbols come from the account, not the query string: what a client asks
+    // for must not be able to spend the shared Marketaux budget on symbols
+    // nobody is actually watching.
+    const userId = ctx.session!.userId;
+    const symbols = await watchlistFor(userId);
     if (symbols.length === 0) return json(ctx, 200, { enabled: true, articles: [] });
 
     // Register interest so the 30-min job keeps these warm.
-    await registerWatched(symbols);
+    await registerWatched(userId, symbols);
 
     let articles = await getCachedNews(symbols);
     // Cold cache (symbol never fetched) — do one on-demand batch so the first
     // view isn't empty, then re-read. Subsequent refreshes come from the job.
     if (articles.length === 0) {
-      const fresh = symbols.filter(Boolean);
-      if (fresh.length) {
-        await fetchNewsBatch(fresh.slice(0, Math.max(1, config.newsSymbolsPerReq)));
-        articles = await getCachedNews(symbols);
-      }
+      await fetchNewsBatch(symbols.slice(0, Math.max(1, config.newsSymbolsPerReq)));
+      articles = await getCachedNews(symbols);
     }
     json(ctx, 200, { enabled: true, articles });
   }));

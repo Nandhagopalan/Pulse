@@ -240,7 +240,7 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
             </div>
           )}
           <Footnote>
-            {sorted.length} of {D.stocks.length} stocks{filterNote ? ' · ' + filterNote : ''} · {sortLabel(sort, headLabels)} · click a row for fundamentals
+            {sorted.length} of {D.stocks.length} stocks{filterNote ? ' · ' + filterNote : ''} · {sortLabel(sort, headLabels)} · click a row for detail
           </Footnote>
         </TableShell>
       </div>

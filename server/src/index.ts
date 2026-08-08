@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const server = createServer((req, res) => void router.dispatch(req, res));
   server.listen(config.port, () => {
     console.log(`[pulse-server] listening on http://localhost:${config.port}`);
-    console.log(`[pulse-server] Kite SSO redirect URL: ${config.kiteRedirectUrl}`);
+    console.log(`[pulse-server] Google OAuth redirect URL: ${config.googleRedirectUrl}`);
   });
   startScheduler();
   await bootCatchup();

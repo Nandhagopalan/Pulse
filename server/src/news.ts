@@ -103,16 +103,20 @@ export async function fetchNewsBatch(symbols: string[]): Promise<number> {
   return written;
 }
 
-/** Record that a client is interested in these symbols (drives the refresh job). */
-export async function registerWatched(symbols: string[]): Promise<void> {
+/**
+ * Record that this user is interested in these symbols (drives the refresh job).
+ * Scoped per user: one person's watchlist must not decide what anyone else's
+ * news feed is kept warm with, nor silently spend the shared request budget.
+ */
+export async function registerWatched(userId: string, symbols: string[]): Promise<void> {
   if (symbols.length === 0) return;
   const db = await getDb();
   const now = new Date().toISOString();
   for (const sym of symbols) {
     await db.run(
-      `INSERT INTO watched_symbols (symbol, last_seen) VALUES (?, ?)
-       ON CONFLICT(symbol) DO UPDATE SET last_seen = excluded.last_seen`,
-      [sym, now],
+      `INSERT INTO news_interest (user_id, symbol, last_seen) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, symbol) DO UPDATE SET last_seen = excluded.last_seen`,
+      [userId, sym, now],
     );
   }
 }
@@ -138,22 +142,36 @@ export async function getCachedNews(symbols: string[], limit = 60): Promise<News
 }
 
 /**
- * Refresh news for every symbol seen by a client in the last 24h.
- * Batched to respect the free-tier request budget. Called by the scheduler.
+ * Refresh news for every symbol any user has looked at in the last 24h.
+ *
+ * Deduplicated across users — an article about RELIANCE is the same article for
+ * everyone, so the cache stays keyed by symbol and only the *interest* is
+ * per-user. The union is still capped: the free tier is 100 requests/day total,
+ * and a hard ceiling here is what stops a handful of large watchlists from
+ * spending the whole budget in one pass.
  */
 export async function refreshWatchlistNews(): Promise<void> {
   if (!config.marketauxApiKey) return;
   const db = await getDb();
   const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const rows = await db.all<{ symbol: string }>(
-    'SELECT symbol FROM watched_symbols WHERE last_seen >= ? ORDER BY symbol', [cutoff],
+    'SELECT DISTINCT symbol FROM news_interest WHERE last_seen >= ? ORDER BY symbol', [cutoff],
   );
   const symbols = rows.map(r => r.symbol);
   if (symbols.length === 0) return;
 
   const per = Math.max(1, config.newsSymbolsPerReq);
-  for (let i = 0; i < symbols.length; i += per) {
-    await fetchNewsBatch(symbols.slice(i, i + per));
+  const maxSymbols = Math.max(per, config.newsMaxSymbolsPerRefresh);
+  const budgeted = symbols.slice(0, maxSymbols);
+  if (budgeted.length < symbols.length) {
+    console.warn(
+      `[news] ${symbols.length} symbols wanted, refreshing ${budgeted.length} `
+      + '(NEWS_MAX_SYMBOLS_PER_REFRESH). Raise the cap or move to per-user API keys.',
+    );
   }
-  console.log(`[news] refreshed ${symbols.length} watched symbols`);
+
+  for (let i = 0; i < budgeted.length; i += per) {
+    await fetchNewsBatch(budgeted.slice(i, i + per));
+  }
+  console.log(`[news] refreshed ${budgeted.length} watched symbols`);
 }

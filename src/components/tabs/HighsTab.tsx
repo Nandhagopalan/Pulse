@@ -59,7 +59,7 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
           toggle={toggle}
           onOpen={onOpen}
           initialSort={{ key: 'chg1w', dir: 'desc' }}
-          footnote={rows.length + ' stocks · click any column header to sort · click a row for fundamentals, star it to watch'}
+          footnote={rows.length + ' stocks · click any column header to sort · click a row for detail, star it to watch'}
         />
       </div>
     </div>

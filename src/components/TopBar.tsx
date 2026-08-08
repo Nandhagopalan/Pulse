@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { T } from '../theme';
 import { Label, Mono, inputStyle } from './ui';
-import type { Profile } from '../lib/profile';
+import type { Prefs, Profile } from '../lib/profile';
 import { fmtInr } from '../lib/profile';
 import { marketStatus } from '../lib/market';
 import type { SessionUser } from '../lib/api';
@@ -35,7 +35,7 @@ function ProfileField({ label, value, onCommit, prefix }: {
 export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, dataSource, asOf, onRefresh, onLogout }: {
   title: string;
   profile: Profile;
-  updateProfile: (p: Partial<Profile>) => void;
+  updateProfile: (p: Partial<Prefs>) => void;
   watchCount: number;
   sessionUser?: SessionUser | null;
   dataSource?: 'live' | 'demo';
