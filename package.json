@@ -9,12 +9,17 @@
     "lint": "oxlint",
     "preview": "vite preview"
   },
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
+    "pg": "^8.22.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
+    "@types/pg": "^8.21.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

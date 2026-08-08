@@ -35,6 +35,8 @@ function parseEmailList(raw: string): Set<string> {
   return new Set(raw.split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean));
 }
 
+const appUrl = env('APP_URL', 'http://localhost:5173');
+
 export const config = {
   port: Number(env('PORT', '8000')),
 
@@ -52,13 +54,22 @@ export const config = {
   allowAllSignups: env('ALLOW_ALL_SIGNUPS', '') === '1',
 
   /** Where to send the browser after a successful login. */
-  appUrl: env('APP_URL', 'http://localhost:5173'),
+  appUrl,
+  /**
+   * Mark session cookies `Secure` when the app is served over HTTPS. Derived
+   * from APP_URL rather than a NODE_ENV guess: the deployment that needs the
+   * flag is exactly the one whose app URL is https, and localhost — where a
+   * Secure cookie would simply never be stored — stays working untouched.
+   */
+  secureCookies: appUrl.startsWith('https://'),
   /**
    * Required: postgres://... — there is no local-file fallback. SUPABASE_DB_URL
    * is the same thing under the name Supabase uses. For local development,
    * `supabase start` runs the stack in Docker and prints a URI to use here.
    */
   databaseUrl: env('DATABASE_URL') || env('SUPABASE_DB_URL'),
+  /** Connections per instance. Small on purpose — see the comment in db.ts. */
+  dbPoolMax: Number(env('DB_POOL_MAX', '3')),
   /** Dev only: when '1', GET /auth/dev-login creates a session without Google. */
   devLogin: env('DEV_LOGIN', '') === '1',
   /** Marketaux news API token (marketaux.com). News features disabled if unset.

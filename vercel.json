@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/pulse?__path=/api/$1" },
+    { "source": "/auth/(.*)", "destination": "/api/pulse?__path=/auth/$1" },
+    { "source": "/health", "destination": "/api/pulse?__path=/health" }
+  ],
+  "functions": {
+    "api/pulse.ts": {
+      "maxDuration": 30
+    }
+  }
+}

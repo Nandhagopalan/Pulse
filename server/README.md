@@ -43,6 +43,7 @@ one serves 503s from `/api/market/summary` until a session is published — run
 | `APP_URL` | `http://localhost:5173` | Where the browser lands after login |
 | `PORT` | `8000` | API port |
 | `SUPABASE_DB_URL` | — | **Required.** Postgres URI. `DATABASE_URL` is accepted as an alias |
+| `DB_POOL_MAX` | `3` | Connections per instance. Kept small because serverless runs many instances |
 | `DEV_LOGIN` | off | `1` enables `GET /auth/dev-login` (local session without Google — dev only) |
 | `MARKETAUX_API_KEY` | — | Watchlist news. Unset disables the News tab |
 | `NEWS_REFRESH_MIN` | `30` | A symbol refreshed this recently is skipped on read; keep ≥ 30 on the free tier |
@@ -68,8 +69,12 @@ one serves 503s from `/api/market/summary` until a session is published — run
   is the single source of truth, applied by `supabase db push` or the GitHub
   integration. The server assumes the tables exist and fails loudly if they do not.
 - **No scheduler.** Nothing runs on a timer in this process; it is a pure request
-  handler, which is what makes the Vercel port viable. The nightly work belongs to
+  handler, which is what made the Vercel port viable. The nightly work belongs to
   GitHub Actions.
+- **Two entry points, one app.** `src/app.ts` owns the route table. `src/index.ts`
+  serves it from a long-lived Node process (local development) and
+  [`../api/pulse.ts`](../api/pulse.ts) serves the same routes as a single Vercel
+  function. Deployment details are in [../docs/architecture.md](../docs/architecture.md) §9.
 - **Auth**: all `/api/*` routes require a session cookie issued by the Google SSO
   callback. Sessions live in the DB and last 30 days; they carry identity only, no
   third-party token. CSRF on the OAuth round trip is covered by a one-time `state`

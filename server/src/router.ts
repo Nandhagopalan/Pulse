@@ -1,5 +1,6 @@
 /** Minimal zero-dependency HTTP router with JSON + cookie helpers. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { config } from './config.ts';
 
 export interface Ctx {
   req: IncomingMessage;
@@ -91,7 +92,8 @@ export function redirect(ctx: Ctx, location: string): void {
 }
 
 export function setCookie(ctx: Ctx, name: string, value: string, maxAgeSec: number): void {
-  const cookie = `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`;
+  const secure = config.secureCookies ? '; Secure' : '';
+  const cookie = `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${maxAgeSec}`;
   const prev = ctx.res.getHeader('Set-Cookie');
   const all = prev ? ([] as string[]).concat(prev as string[], cookie) : [cookie];
   ctx.res.setHeader('Set-Cookie', all);

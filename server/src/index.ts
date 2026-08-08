@@ -1,18 +1,9 @@
 import { createServer } from 'node:http';
 import { config } from './config.ts';
-import { Router } from './router.ts';
-import { registerAuthRoutes } from './auth.ts';
-import { registerApiRoutes } from './api.ts';
+import { buildRouter } from './app.ts';
 import { getDb } from './db.ts';
 
-const router = new Router();
-registerAuthRoutes(router);
-registerApiRoutes(router);
-
-router.get('/health', ctx => {
-  ctx.res.writeHead(200, { 'Content-Type': 'application/json' });
-  ctx.res.end(JSON.stringify({ ok: true }));
-});
+const router = buildRouter();
 
 async function main(): Promise<void> {
   await getDb(); // fail fast if storage is misconfigured

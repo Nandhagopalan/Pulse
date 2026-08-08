@@ -6,7 +6,7 @@
  * the profile → upsert user, create session row, set HttpOnly cookie.
  *
  * Identity is the only thing sessions carry. Pulse holds no broker credential
- * of any kind — see docs/multi_user_deployment_proposal.md.
+ * of any kind — see docs/architecture.md.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { getDb } from './db.ts';

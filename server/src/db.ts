@@ -22,7 +22,20 @@ class PgDb implements Db {
   constructor(pool: PgDb['pool']) { this.pool = pool; }
   static async connect(url: string): Promise<PgDb> {
     const { default: pg } = await import('pg');
-    return new PgDb(new pg.Pool({ connectionString: url }));
+    /*
+     * Pool per *instance*, and on Vercel there are many instances. A default
+     * pool (max 10) times a few dozen warm functions exhausts Supabase long
+     * before the traffic justifies it, so the cap is small and idle sockets are
+     * dropped quickly. Concurrency is meant to come from more instances, not
+     * from a deep pool inside one; the connection string should point at
+     * Supabase's transaction pooler (port 6543) for the same reason.
+     */
+    return new PgDb(new pg.Pool({
+      connectionString: url,
+      max: config.dbPoolMax,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+    }));
   }
   private translate(sql: string): string {
     let n = 0;

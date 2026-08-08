@@ -13,8 +13,9 @@ integration; the numbers advance once a night when the pipeline runs.
 | --- | --- |
 | `src/` | React terminal UI (Breadth, Charts, Sectors, Highs, Drawdown, Watchlist tabs) |
 | `server/` | Backend: Google SSO + REST API — see [server/README.md](server/README.md) |
+| `api/` | Vercel adapter — serves `server/`'s routes as one function |
 | `pipeline/` | Python batch pipeline: NSE → R2 Parquet lake → DuckDB analytics → Supabase — see [pipeline/README.md](pipeline/README.md) |
-| `docs/` | [Multi-user deployment proposal](docs/multi_user_deployment_proposal.md) — the plan this is being built against |
+| `docs/` | [Architecture and deployment](docs/architecture.md) — how the system is built, and the Vercel port still pending |
 
 ## Quick start
 

@@ -17,7 +17,7 @@ NSE archives ──► Cloudflare R2 ──► DuckDB ──► Supabase ──�
 | **DuckDB** | nothing — it is a library, not a server | Runs inside the job, scans the Parquet on R2, exits. Nothing to host or pay for. |
 | **Supabase** | the latest computed state per symbol, plus user tables | This is the only thing in the request path, so it stays small and indexed. |
 
-Supabase holds only what a request reads — 14 tables, listed in
+Supabase holds only what a request reads — 13 tables, listed in
 [`supabase/migrations`](../supabase/migrations), which is the single source of
 truth for that schema:
 
