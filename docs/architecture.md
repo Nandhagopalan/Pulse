@@ -275,9 +275,9 @@ key both halves share.
 
 ## 9. Stage 5 — the Vercel port
 
-**Status:** code done; the deploy itself is blocked only on a domain (§14). §9.2
-and §9.6 are built and typechecked; §9.3–§9.5 are configuration to be applied on
-the Vercel project.
+**Status:** **done and live** at `https://pulse-woad-eta-30.vercel.app`, deployed
+from `main` through the GitHub integration. §10.1 records what the first deploys
+got wrong and why.
 
 ### 9.1 What used to block it, and why it no longer does
 
@@ -347,6 +347,22 @@ idle timeout — because concurrency here is meant to come from more instances, 
 from a deep pool inside one. A default pool of 10 times a few dozen warm functions
 exhausts Supabase long before the traffic justifies it.
 
+**The TLS parameter is not optional and not obvious.** `pg` 8.22 treats a bare
+`sslmode=require` as `verify-full`, and Supabase's pooler chain fails that with
+*"self-signed certificate in certificate chain"*. Use
+`?uselibpqcompat=true&sslmode=require`, which selects libpq semantics — encrypted,
+without chain verification — and is the spelling that stays correct in `pg` 9.
+`sslmode=no-verify` also works and means the same thing today, but the compat form
+says so explicitly. Verifying the chain properly would mean shipping Supabase's CA
+and using `verify-full`; worth doing if this ever carries more than EOD prices.
+
+**Region.** The database is in `ap-northeast-2` (Seoul) and functions currently
+execute in `bom1` (Mumbai). `buildSummary()` issues about ten sequential queries,
+so every millisecond of cross-region latency is paid ten times per dashboard load.
+Co-locating the function region with the database is the single cheapest
+improvement available; parallelising the six index queries with `Promise.all` is
+the next.
+
 The pipeline is the opposite case — long single-writer jobs — and should keep the
 session pooler string it already uses in CI.
 
@@ -357,7 +373,7 @@ belongs here: the pipeline runs on GitHub Actions, not on Vercel.
 
 | Key | Value |
 | --- | --- |
-| `SUPABASE_DB_URL` | Supabase **transaction pooler** URI (port 6543), with `sslmode=require` |
+| `SUPABASE_DB_URL` | Supabase **transaction pooler** URI (port 6543), with `?uselibpqcompat=true&sslmode=require` — see §9.3 |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | From the OAuth client |
 | `GOOGLE_REDIRECT_URL` | `https://<domain>/auth/google/callback` |
 | `APP_URL` | `https://<domain>` |
@@ -423,11 +439,35 @@ Operations (remaining, in order):
    allowlist), `GET /api/status` (proves the database connection and shows what
    the pipeline has published).
 
-**Watch on the first deploy:** whether Vercel's builder resolves the explicit
-`.ts` import specifiers in `server/src`. They are valid for Node 24's native type
-stripping and for the local build, but the function bundler is a third toolchain
-and is the one part of §9.2 that cannot be verified without deploying. If it
-objects, the fix is a bundler-side resolver setting, not a change to the server.
+### 10.1 What the first deploy taught us
+
+The `.ts` import specifiers were the flagged risk, and they did bite — twice, in
+two different toolchains, with the same misleading symptom both times: **the
+static build succeeds, the site serves, and every function route returns
+`FUNCTION_INVOCATION_FAILED`.** A green deployment is not evidence the API works.
+
+1. **Type-check (`TS5097`).** `@vercel/node` type-checks `api/pulse.ts` against
+   the repo-root `tsconfig.json`, which is solution-style — `files: []` plus two
+   references, no `compilerOptions` — so the check ran on compiler defaults and
+   rejected every `import './config.ts'`. Fixed by giving that file
+   `compilerOptions` (`allowImportingTsExtensions`, `noEmit`, nodenext). They are
+   inert locally: with `files: []` they compile nothing, and `tsc -b` builds the
+   referenced projects with their own settings.
+
+2. **Dependency tracing.** With the types accepted, the function still failed at
+   module load: the tracer does not follow `.ts` specifiers *out of* `api/`, so
+   `server/src` was never copied into the lambda. Fixed with
+   `includeFiles: "server/src/**"` in vercel.json.
+
+Rewriting the imports to drop `.ts` would have solved both, and is the wrong
+trade: those specifiers are exactly what lets `server/` run under Node's native
+type stripping with no build step.
+
+**Runtime logs are not reachable with a project-scoped token** — the CLI insists
+on resolving a user, and `/v1/deployments/{id}/runtime-logs` 404s. Build logs come
+from `/v3/deployments/{id}/events?builds=1`. Diagnosing the second failure needed
+a temporary lazy import with a try/catch that reported the load error over HTTP;
+worth remembering as the technique if a future deploy fails opaquely.
 
 ## 11. Stage 6 — news quota
 
@@ -455,7 +495,7 @@ union, or making news opt-in per account.
 | 2 | Per-user watchlist and prefs tables; news scoped per user | **done** |
 | 4 | Fundamentals decision | **done** — removed |
 | — | Migrations become the only schema; self-ingest and the SQLite path deleted | **done** |
-| 5 | Vercel port (§9) | **code done**; deploy blocked on a domain |
+| 5 | Vercel port (§9) | **done** — live, deploying from `main` |
 | 6 | News quota strategy (§11) | pending |
 
 ## 13. Decisions and why
@@ -521,8 +561,9 @@ every Google account on earth.
 
 ## 14. Open decisions
 
-- [ ] **Production domain**, so the OAuth redirect URI can be registered (§9.5).
-      Blocks the deploy.
+- [ ] **A custom domain**, if the generated `pulse-woad-eta-30.vercel.app` is not
+      the long-term address. Changing it means updating `APP_URL` and
+      `GOOGLE_REDIRECT_URL` and adding the new redirect URI in Google Console.
 - [ ] **Access control at launch** — allowlist, or open signups? Determines how
       much §11 and abuse questions matter.
 - [ ] **Vercel Pro in scope?** Hobby cron is daily-only. Matters only if anything
