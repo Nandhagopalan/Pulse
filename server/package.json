@@ -5,10 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.ts",
-    "start": "node src/index.ts",
-    "backfill": "node src/jobs.ts backfill",
-    "eod": "node src/jobs.ts eod",
-    "analytics": "node src/jobs.ts analytics"
+    "start": "node src/index.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",

@@ -1,11 +1,9 @@
 /** Terminal-facing API. All routes require an authenticated session. */
-import { config } from './config.ts';
 import { getDb, metaGet } from './db.ts';
 import { requireAuth } from './auth.ts';
 import { json, readJson, type Router } from './router.ts';
-import { backfillProgress } from './ingest/nse.ts';
 import { isMarketOpen } from './util.ts';
-import { getCachedNews, registerWatched, newsEnabled, fetchNewsBatch } from './news.ts';
+import { getCachedNews, refreshIfStale, newsEnabled } from './news.ts';
 
 /** Display name → name used in the NSE all-indices close file (uppercased). */
 const INDEX_STRIP: [string, string][] = [
@@ -119,10 +117,7 @@ export function registerApiRoutes(router: Router): void {
     if (!summary) {
       return json(ctx, 503, {
         error: 'no_data',
-        message: backfillProgress.running
-          ? `Backfill in progress: ${backfillProgress.done}/${backfillProgress.target} sessions`
-          : 'No market data ingested yet. Backfill has not completed.',
-        backfill: backfillProgress,
+        message: 'No published session yet — the nightly pipeline has not run against this database.',
       });
     }
     json(ctx, 200, summary);
@@ -145,44 +140,23 @@ export function registerApiRoutes(router: Router): void {
       });
     }
 
-    if (config.pipelineMode) {
-      /*
-       * Pipeline mode: candles come pre-adjusted from the cache the EOD job
-       * writes. The 20-year bar history lives on R2 as Parquet — too large for
-       * this database, and a columnar scan is the wrong shape for a request that
-       * wants one symbol's recent tail.
-       */
-      const rows = await db.all<{ data: string }>(
-        'SELECT data FROM stock_candles WHERE symbol = ?', [sym],
-      );
-      if (!rows.length) return json(ctx, 404, { error: 'unknown_symbol' });
-      const c = JSON.parse(rows[0].data) as {
-        d: string[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
-      };
-      const from = Math.max(0, c.d.length - n);
-      const candles = c.d.slice(from).map((d, i) => ({
-        d, o: c.o[from + i], h: c.h[from + i], l: c.l[from + i], c: c.c[from + i], v: c.v[from + i],
-      }));
-      return json(ctx, 200, { sym, candles });
-    }
-
-    const rows = await db.all<{ date: string; open: number; high: number; low: number; close: number; volume: number }>(
-      'SELECT date, open, high, low, close, volume FROM daily_bars WHERE symbol = ? ORDER BY date DESC LIMIT ?',
-      [sym, n],
+    /*
+     * Candles come pre-adjusted from the cache the EOD job writes. The 20-year
+     * bar history lives on R2 as Parquet — too large for this database, and a
+     * columnar scan is the wrong shape for a request that wants one symbol's
+     * recent tail.
+     */
+    const rows = await db.all<{ data: string }>(
+      'SELECT data FROM stock_candles WHERE symbol = ?', [sym],
     );
     if (!rows.length) return json(ctx, 404, { error: 'unknown_symbol' });
-    const bars = rows.reverse();
-
-    // Apply corporate-action adjustment chain.
-    const acts = await db.all<{ ex_date: string; factor: number }>(
-      'SELECT ex_date, factor FROM corporate_actions WHERE symbol = ? AND factor > 0.05 AND factor < 20 ORDER BY ex_date',
-      [sym],
-    );
-    const candles = bars.map(b => {
-      let k = 1;
-      for (const a of acts) if (a.ex_date > b.date) k *= a.factor;
-      return { d: b.date, o: b.open / k, h: b.high / k, l: b.low / k, c: b.close / k, v: b.volume * k };
-    });
+    const c = JSON.parse(rows[0].data) as {
+      d: string[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
+    };
+    const from = Math.max(0, c.d.length - n);
+    const candles = c.d.slice(from).map((d, i) => ({
+      d, o: c.o[from + i], h: c.h[from + i], l: c.l[from + i], c: c.c[from + i], v: c.v[from + i],
+    }));
     json(ctx, 200, { sym, candles });
   }));
 
@@ -282,38 +256,27 @@ export function registerApiRoutes(router: Router): void {
     const symbols = await watchlistFor(userId);
     if (symbols.length === 0) return json(ctx, 200, { enabled: true, articles: [] });
 
-    // Register interest so the 30-min job keeps these warm.
-    await registerWatched(userId, symbols);
-
-    let articles = await getCachedNews(symbols);
-    // Cold cache (symbol never fetched) — do one on-demand batch so the first
-    // view isn't empty, then re-read. Subsequent refreshes come from the job.
-    if (articles.length === 0) {
-      await fetchNewsBatch(symbols.slice(0, Math.max(1, config.newsSymbolsPerReq)));
-      articles = await getCachedNews(symbols);
-    }
+    // Top up whatever has gone stale (at most one Marketaux request), then read
+    // the cache. A cold symbol sorts first, so a first view is never empty.
+    await refreshIfStale(symbols);
+    const articles = await getCachedNews(symbols);
     json(ctx, 200, { enabled: true, articles });
   }));
 
   router.get('/api/status', requireAuth(async ctx => {
     const db = await getDb();
-    // In pipeline mode `daily_bars` does not exist here — the history is on R2 —
-    // so report the coverage of what this database actually serves.
-    const bars = config.pipelineMode
-      ? (await db.all<{ c: number; days: number }>(
-          'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM stock_metrics'))[0]
-      : (await db.all<{ c: number; days: number }>(
-          'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM daily_bars'))[0];
+    // The bar history is on R2, so coverage here is what this database actually
+    // serves: the published per-session metrics.
+    const bars = (await db.all<{ c: number; days: number }>(
+      'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM stock_metrics'))[0];
     const log = await db.all(
       'SELECT ts, job, date, status, detail FROM ingest_log ORDER BY ts DESC LIMIT 25',
     );
     json(ctx, 200, {
       marketOpen: isMarketOpen(),
-      mode: config.pipelineMode ? 'pipeline' : 'self-ingest',
       lastIngestedSession: await metaGet('last_ingested_session'),
       lastAnalyticsDate: await metaGet('last_analytics_date'),
       bars,
-      backfill: backfillProgress,
       recentLog: log,
     });
   }));

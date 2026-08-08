@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = resolve(HERE, '..', '..'); // repo root
 export const SERVER_DIR = resolve(HERE, '..');
-export const DATA_DIR = resolve(SERVER_DIR, 'data');
 
 function parseEnvFile(path: string): Record<string, string> {
   try {
@@ -54,21 +53,12 @@ export const config = {
 
   /** Where to send the browser after a successful login. */
   appUrl: env('APP_URL', 'http://localhost:5173'),
-  /** Optional: postgres://... — falls back to SQLite in server/data/pulse.db.
-   *  SUPABASE_DB_URL is the same thing under the name Supabase uses. */
-  databaseUrl: env('DATABASE_URL') || env('SUPABASE_DB_URL'),
   /**
-   * When true, the Python pipeline (pipeline/) owns ingestion and analytics:
-   * it writes the derived tables into Supabase and keeps the 20-year bar history
-   * on R2. The Node server then only serves and does live quotes — running both
-   * ingest paths against one database would have them overwrite each other.
-   * Defaults on whenever a Supabase URL is configured; set PIPELINE_MODE=0 to
-   * force the legacy self-ingesting behaviour.
+   * Required: postgres://... — there is no local-file fallback. SUPABASE_DB_URL
+   * is the same thing under the name Supabase uses. For local development,
+   * `supabase start` runs the stack in Docker and prints a URI to use here.
    */
-  pipelineMode: Boolean(env('SUPABASE_DB_URL')) && env('PIPELINE_MODE', '1') !== '0',
-  /** Number of trading sessions of history to backfill on bootstrap.
-   *  ~2500 ≈ 10 years, which is what true all-time-high detection needs. */
-  backfillSessions: Number(env('BACKFILL_SESSIONS', '2500')),
+  databaseUrl: env('DATABASE_URL') || env('SUPABASE_DB_URL'),
   /** Dev only: when '1', GET /auth/dev-login creates a session without Google. */
   devLogin: env('DEV_LOGIN', '') === '1',
   /** Marketaux news API token (marketaux.com). News features disabled if unset.
@@ -78,14 +68,13 @@ export const config = {
   newsRefreshMin: Number(env('NEWS_REFRESH_MIN', '30')),
   /** Suffix Marketaux uses for NSE symbols (RELIANCE → RELIANCE.NS). */
   newsSymbolSuffix: env('NEWS_SYMBOL_SUFFIX', '.NS'),
-  /** Symbols batched per Marketaux request (comma-separated); free tier caps articles. */
-  newsSymbolsPerReq: Number(env('NEWS_SYMBOLS_PER_REQ', '5')),
   /**
-   * Ceiling on symbols refreshed per pass, across all users. The free tier is
-   * 100 requests/day in total, so without a cap a few large watchlists exhaust
-   * the budget for everyone. 100 symbols ÷ 5 per request = 20 requests/refresh.
+   * Symbols batched per Marketaux request (comma-separated); free tier caps
+   * articles. This doubles as the per-view refresh ceiling: a page view spends
+   * exactly one request, so the shared 100/day budget degrades to slower
+   * rotation across a large watchlist rather than sudden exhaustion.
    */
-  newsMaxSymbolsPerRefresh: Number(env('NEWS_MAX_SYMBOLS_PER_REFRESH', '100')),
+  newsSymbolsPerReq: Number(env('NEWS_SYMBOLS_PER_REQ', '5')),
 };
 
 if (!config.googleClientId || !config.googleClientSecret) {
@@ -98,4 +87,10 @@ if (!config.googleClientId || !config.googleClientSecret) {
 }
 if (!config.marketauxApiKey) {
   console.warn('[config] MARKETAUX_API_KEY missing — watchlist news will be unavailable.');
+}
+if (!config.databaseUrl) {
+  console.warn(
+    '[config] No SUPABASE_DB_URL / DATABASE_URL — the server will refuse to start. '
+    + 'Run `supabase start` for a local stack and use the URI it prints.',
+  );
 }

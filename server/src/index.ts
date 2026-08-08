@@ -3,7 +3,6 @@ import { config } from './config.ts';
 import { Router } from './router.ts';
 import { registerAuthRoutes } from './auth.ts';
 import { registerApiRoutes } from './api.ts';
-import { startScheduler, bootCatchup } from './scheduler.ts';
 import { getDb } from './db.ts';
 
 const router = new Router();
@@ -22,8 +21,6 @@ async function main(): Promise<void> {
     console.log(`[pulse-server] listening on http://localhost:${config.port}`);
     console.log(`[pulse-server] Google OAuth redirect URL: ${config.googleRedirectUrl}`);
   });
-  startScheduler();
-  await bootCatchup();
 }
 
 void main();

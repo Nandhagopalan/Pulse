@@ -9,19 +9,19 @@ holds two decades.
 Writes go through a direct Postgres connection rather than PostgREST: this is a
 few thousand upserts in one transaction, which COPY-style batching does in
 seconds and the REST API does in minutes.
+
+The schema itself is not this module's business: supabase/migrations owns it,
+applied with `supabase db push`. This job assumes the tables are already there.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from datetime import date, datetime, timezone
+from typing import List, Sequence, Tuple
 
 import psycopg
 
 from .config import config
-
-SCHEMA_SQL = (Path(__file__).parent / "schema.sql").read_text()
 
 BATCH = 500
 
@@ -34,12 +34,6 @@ def _executemany(cur, sql: str, rows: Sequence[Tuple], label: str) -> int:
         total += len(chunk)
     print(f"  {label}: {total:,} rows")
     return total
-
-
-def ensure_schema(conn) -> None:
-    with conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
-    conn.commit()
 
 
 def publish_snapshot(conn, snap: dict) -> None:
@@ -68,15 +62,6 @@ def publish_snapshot(conn, snap: dict) -> None:
         _executemany(
             cur, "INSERT INTO stock_metrics (date, symbol, data) VALUES (%s, %s, %s)",
             [(date, s["sym"], json.dumps(s)) for s in snap["stocks"]], "stock metrics",
-        )
-
-        # ── Instruments / sector map ─────────────────────────────────────────
-        _executemany(
-            cur,
-            """INSERT INTO instruments (symbol, sector, industry, active) VALUES (%s, %s, %s, 1)
-               ON CONFLICT (symbol) DO UPDATE SET sector = EXCLUDED.sector,
-                 industry = EXCLUDED.industry, active = 1""",
-            [(s["sym"], s["sector"], s["sector"]) for s in snap["stocks"]], "instruments",
         )
 
         # ── Index history ────────────────────────────────────────────────────
@@ -119,62 +104,67 @@ def publish_snapshot(conn, snap: dict) -> None:
     conn.commit()
 
 
-def publish_actions(conn) -> None:
-    """
-    Mirror the applied corporate actions so the UI can explain a price jump.
+FII_DII_PATH = "/api/fiidiiTradeReact"
+FII_DII_REFERER = "/reports/fii-dii"
 
-    Read back from the R2 dataset rather than passed in, so this stays correct
-    whether it runs after a rebuild or on its own.
-    """
-    from . import corporate_actions as ca
-    from . import r2
-    from .analytics import _uris
 
-    con = r2.duck()
+def publish_flows(conn) -> None:
+    """
+    FII/DII provisional flows.
+
+    Not part of the lake: NSE publishes only a rolling two-day window with no
+    archive, so there is nothing to backfill and no Parquet dataset to derive
+    this from — each run captures what is on the page and upserts it. This
+    used to run in the Node server; it moved here when that server stopped
+    doing ingestion of any kind.
+
+    Best-effort by design. The endpoint lives on www.nseindia.com, which blocks
+    datacenter IPs far more aggressively than the archive host, so a failure
+    logs and returns rather than failing the nightly chain over a sidebar.
+    """
+    from . import nse
+
     try:
-        _, _, actions_uri, _ = _uris()
-        rows = con.execute(
-            f"""SELECT symbol, CAST(ex_date AS VARCHAR), kind, factor, subject
-                FROM read_parquet('{actions_uri}') WHERE applied
-                AND factor BETWEEN {ca.MIN_FACTOR} AND {ca.MAX_FACTOR}"""
-        ).fetchall()
-    finally:
-        con.close()
+        rows = nse.fetch_www_json(FII_DII_PATH, referer=FII_DII_REFERER)
+    except Exception as err:  # noqa: BLE001 — a blocked scrape must not fail EOD
+        print(f"  fii/dii: unavailable ({err})")
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ingest_log (ts, job, date, status, detail) VALUES (%s, %s, %s, %s, %s)",
+                (datetime.now(timezone.utc).isoformat(), "fii_dii",
+                 date.today().isoformat(), "failed", str(err)[:500]),
+            )
+        conn.commit()
+        return
+
+    out: List[Tuple] = []
+    for r in rows:
+        category = (r.get("category") or "").upper()
+        # The feed labels the foreign side FII or FPI depending on the day.
+        side = "FII" if "FII" in category or "FPI" in category else "DII"
+        try:
+            d = datetime.strptime(r["date"].strip(), "%d-%b-%Y").date().isoformat()
+        except (KeyError, ValueError):
+            d = date.today().isoformat()
+        out.append((d, side, _f(r.get("buyValue")), _f(r.get("sellValue")), _f(r.get("netValue"))))
 
     with conn.cursor() as cur:
         _executemany(
             cur,
-            """INSERT INTO corporate_actions (symbol, ex_date, kind, factor, detail)
+            """INSERT INTO fii_dii (date, category, buy, sell, net)
                VALUES (%s, %s, %s, %s, %s)
-               ON CONFLICT (symbol, ex_date, kind) DO UPDATE SET
-                 factor = EXCLUDED.factor, detail = EXCLUDED.detail""",
-            rows, "corporate actions",
+               ON CONFLICT (date, category) DO UPDATE SET
+                 buy = EXCLUDED.buy, sell = EXCLUDED.sell, net = EXCLUDED.net""",
+            out, "fii/dii flows",
         )
     conn.commit()
 
 
-def publish_membership(conn) -> None:
-    """Index constituent lists — drives the index filters in the screener."""
-    from . import r2
-    from .reference import CONSTITUENTS_KEY
-    from .config import s3_uri
-
-    con = r2.duck()
+def _f(v) -> float:
     try:
-        rows = con.execute(
-            f"SELECT DISTINCT index_name, symbol FROM read_parquet('{s3_uri(CONSTITUENTS_KEY)}')"
-        ).fetchall()
-    finally:
-        con.close()
-
-    with conn.cursor() as cur:
-        # Replace wholesale: constituents leave indices as well as join them.
-        cur.execute("DELETE FROM index_membership")
-        _executemany(
-            cur, "INSERT INTO index_membership (index_name, symbol) VALUES (%s, %s)",
-            rows, "index membership",
-        )
-    conn.commit()
+        return float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def run(snap: dict = None) -> None:
@@ -187,8 +177,6 @@ def run(snap: dict = None) -> None:
 
     print(f"[publish] {snap['date']} → Supabase")
     with psycopg.connect(url) as conn:
-        ensure_schema(conn)
         publish_snapshot(conn, snap)
-        publish_actions(conn)
-        publish_membership(conn)
+        publish_flows(conn)
     print("[publish] done")

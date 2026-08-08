@@ -2,9 +2,9 @@
  * Watchlist news via the Marketaux API (marketaux.com).
  *
  * Free tier is 100 requests/day, so we batch several symbols per request and
- * cache everything in `news_articles`. A background job (scheduler) refreshes
- * the symbols any client has recently asked for; the API serves straight from
- * the cache so the UI never waits on Marketaux.
+ * cache everything in `news_articles`. The API serves from that cache and tops
+ * it up on read when it has gone stale — there is no background job, because
+ * there is no long-lived process to run one in.
  *
  * NSE symbols are suffixed for Marketaux (RELIANCE → RELIANCE.NS by default).
  */
@@ -103,24 +103,6 @@ export async function fetchNewsBatch(symbols: string[]): Promise<number> {
   return written;
 }
 
-/**
- * Record that this user is interested in these symbols (drives the refresh job).
- * Scoped per user: one person's watchlist must not decide what anyone else's
- * news feed is kept warm with, nor silently spend the shared request budget.
- */
-export async function registerWatched(userId: string, symbols: string[]): Promise<void> {
-  if (symbols.length === 0) return;
-  const db = await getDb();
-  const now = new Date().toISOString();
-  for (const sym of symbols) {
-    await db.run(
-      `INSERT INTO news_interest (user_id, symbol, last_seen) VALUES (?, ?, ?)
-       ON CONFLICT(user_id, symbol) DO UPDATE SET last_seen = excluded.last_seen`,
-      [userId, sym, now],
-    );
-  }
-}
-
 /** Read cached news for the given symbols, newest first. */
 export async function getCachedNews(symbols: string[], limit = 60): Promise<NewsArticle[]> {
   if (symbols.length === 0) return [];
@@ -142,36 +124,35 @@ export async function getCachedNews(symbols: string[], limit = 60): Promise<News
 }
 
 /**
- * Refresh news for every symbol any user has looked at in the last 24h.
+ * Top up the cache for a watchlist, if it has gone stale.
  *
- * Deduplicated across users — an article about RELIANCE is the same article for
- * everyone, so the cache stays keyed by symbol and only the *interest* is
- * per-user. The union is still capped: the free tier is 100 requests/day total,
- * and a hard ceiling here is what stops a handful of large watchlists from
- * spending the whole budget in one pass.
+ * Nothing runs on a timer any more, so the read path is what keeps the cache
+ * warm. A view costs at most one Marketaux request: symbols already refreshed
+ * within NEWS_REFRESH_MIN are skipped, and the rest are taken oldest-first so a
+ * watchlist larger than one batch rotates across views instead of starving its
+ * tail. The cache stays keyed by symbol — an article about RELIANCE is the same
+ * article for every user — so one person's view warms it for everyone.
  */
-export async function refreshWatchlistNews(): Promise<void> {
-  if (!config.marketauxApiKey) return;
+export async function refreshIfStale(symbols: string[]): Promise<void> {
+  if (!config.marketauxApiKey || symbols.length === 0) return;
   const db = await getDb();
-  const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const rows = await db.all<{ symbol: string }>(
-    'SELECT DISTINCT symbol FROM news_interest WHERE last_seen >= ? ORDER BY symbol', [cutoff],
+  const placeholders = symbols.map(() => '?').join(',');
+  const rows = await db.all<{ symbol: string; newest: string | null }>(
+    `SELECT symbol, MAX(fetched_at) AS newest FROM news_articles
+     WHERE symbol IN (${placeholders}) GROUP BY symbol`,
+    symbols,
   );
-  const symbols = rows.map(r => r.symbol);
-  if (symbols.length === 0) return;
+  const newestOf = new Map(rows.map(r => [r.symbol, r.newest ? Date.parse(r.newest) : 0]));
+
+  const now = Date.now();
+  const staleMs = Math.max(1, config.newsRefreshMin) * 60_000;
+  const stale = symbols
+    .map(sym => ({ sym, at: newestOf.get(sym) ?? 0 }))   // never fetched sorts first
+    .filter(x => now - x.at >= staleMs)
+    .sort((a, b) => a.at - b.at)
+    .map(x => x.sym);
+  if (stale.length === 0) return;
 
   const per = Math.max(1, config.newsSymbolsPerReq);
-  const maxSymbols = Math.max(per, config.newsMaxSymbolsPerRefresh);
-  const budgeted = symbols.slice(0, maxSymbols);
-  if (budgeted.length < symbols.length) {
-    console.warn(
-      `[news] ${symbols.length} symbols wanted, refreshing ${budgeted.length} `
-      + '(NEWS_MAX_SYMBOLS_PER_REFRESH). Raise the cap or move to per-user API keys.',
-    );
-  }
-
-  for (let i = 0; i < budgeted.length; i += per) {
-    await fetchNewsBatch(budgeted.slice(i, i + per));
-  }
-  console.log(`[news] refreshed ${budgeted.length} watched symbols`);
+  await fetchNewsBatch(stale.slice(0, per));
 }

@@ -17,6 +17,18 @@ NSE archives ──► Cloudflare R2 ──► DuckDB ──► Supabase ──�
 | **DuckDB** | nothing — it is a library, not a server | Runs inside the job, scans the Parquet on R2, exits. Nothing to host or pay for. |
 | **Supabase** | the latest computed state per symbol, plus user tables | This is the only thing in the request path, so it stays small and indexed. |
 
+Supabase holds only what a request reads — 14 tables, listed in
+[`supabase/migrations`](../supabase/migrations), which is the single source of
+truth for that schema:
+
+```bash
+supabase db push        # apply pending migrations
+```
+
+Neither this pipeline nor the Node server issues DDL any more. Reference data
+the request path never queries (instruments, constituents, corporate actions)
+stays on R2 and is joined in DuckDB at compute time.
+
 ## Commands
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/) from the repo-root

@@ -35,7 +35,18 @@ integration; the numbers advance once a night when the pipeline runs.
    Google account in. In a non-local deployment also set `GOOGLE_REDIRECT_URL` and
    `APP_URL` to the real domain, and register that redirect URI on the OAuth client.
 
-2. **Backend** (port 8000, needs Node ≥ 23):
+2. **Database** — Postgres, always; the backend refuses to start without one.
+   Locally that is the Supabase stack in Docker:
+
+   ```bash
+   supabase start
+   ```
+
+   It applies [`supabase/migrations`](supabase/migrations) — the single source of
+   truth for the schema — and prints a connection URI. Put that in `.env.local`
+   as `SUPABASE_DB_URL`, or point at the hosted project instead.
+
+3. **Backend** (port 8000, needs Node ≥ 23):
 
    ```bash
    cd server
@@ -43,14 +54,11 @@ integration; the numbers advance once a night when the pipeline runs.
    npm start
    ```
 
-   First launch bootstraps ~2500 sessions (~10 years) of NSE history in the
-   background (bhavcopies, delivery data, index closes) and computes analytics;
-   the UI shows progress meanwhile. This takes a while on a cold database —
-   set `BACKFILL_SESSIONS` lower for a faster start, at the cost of shallower
-   all-time-high detection. Re-running the backfill with a larger value
-   deepens existing history rather than re-fetching it.
+   The server only serves; it never ingests. A freshly created database is empty
+   until the pipeline publishes a session into it — `uv run python -m pipeline eod`
+   does that, or use the hosted Supabase, which the nightly Action already fills.
 
-3. **Frontend** (port 5173, proxies `/api` and `/auth` to the backend):
+4. **Frontend** (port 5173, proxies `/api` and `/auth` to the backend):
 
    ```bash
    npm install
@@ -77,8 +85,11 @@ DuckDB in the middle is a library, not a service: it runs inside the nightly job
 scans the Parquet on R2, emits ~2,500 rows, and exits. Nothing to host.
 
 The batch half lives in [pipeline/](pipeline/) and runs nightly on GitHub Actions
-at 19:45 IST. The Node server no longer ingests when `SUPABASE_DB_URL` is set —
-it serves the API and Google SSO, nothing more.
+at 19:45 IST. The Node server does not ingest at all — it serves the API and
+Google SSO, nothing more, and nothing in it runs on a timer.
+
+The schema those two halves share lives in [supabase/migrations](supabase/migrations)
+and nowhere else. Neither the server nor the pipeline issues DDL.
 
 ### Corporate actions
 
