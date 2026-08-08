@@ -1,0 +1,52 @@
+name: EOD pipeline
+
+# NSE publishes the bhavcopy around 18:45 IST. 14:15 UTC is 19:45 IST, which
+# leaves an hour of slack for late files and for GitHub's own cron drift.
+# Weekdays only — there is no session to ingest at the weekend.
+on:
+  schedule:
+    - cron: '15 14 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      session:
+        description: 'Session to ingest (YYYY-MM-DD), blank for latest'
+        required: false
+
+concurrency:
+  # A long run must never overlap the next night's; the job is idempotent but
+  # two writers racing on the same Supabase session date is pointless work.
+  group: eod
+  cancel-in-progress: false
+
+jobs:
+  eod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the exact versions in uv.lock, so a run here matches local.
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Run EOD chain
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_KEY_ID: ${{ secrets.R2_KEY_ID }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          uv run python -m pipeline eod ${{ inputs.session && format('--date {0}', inputs.session) || '' }}
+
+      - name: Lake summary
+        if: always()
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_KEY_ID: ${{ secrets.R2_KEY_ID }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+        run: uv run python -m pipeline summary

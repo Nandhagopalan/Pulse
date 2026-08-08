@@ -34,6 +34,8 @@ npm run analytics   # recompute analytics only
 | `APP_URL` | `http://localhost:5173` | Where the browser lands after login |
 | `PORT` | `8000` | API port |
 | `DATABASE_URL` | *(unset → SQLite at `server/data/pulse.db`)* | Set `postgres://...` to run on PostgreSQL/TimescaleDB |
+| `SUPABASE_DB_URL` | — | Supabase Postgres URI. Setting it turns on **pipeline mode** (below) |
+| `PIPELINE_MODE` | `1` when `SUPABASE_DB_URL` is set | `0` forces the legacy self-ingesting behaviour |
 | `BACKFILL_SESSIONS` | `270` | Trading sessions of history to bootstrap |
 | `DEV_LOGIN` | off | `1` enables `GET /auth/dev-login` (local session without Kite — dev only) |
 
@@ -57,9 +59,23 @@ NSE archives (UDiFF bhavcopy, MTO, index closes, constituents)   Kite Connect (S
 - **Auth**: all `/api/*` routes require a session cookie issued by the Kite SSO
   callback. Sessions live in the DB; the freshest Kite access token is reused by
   backend jobs (Kite tokens expire daily).
-- **Corporate actions**: detected from official prev-close discontinuities and
-  stored as factors; prices are adjusted retroactively at compute/serve time
-  (adjusted = raw / k), so raw ingested bars are never mutated.
-- **Scaling path**: swap `DATABASE_URL` to TimescaleDB, move `ingest/` and
-  `analytics/` into separate workers, put Redis behind `live.ts` — module
-  boundaries already match those seams.
+- **Corporate actions**: adjustment factors are produced by the pipeline from
+  NSE's corporate actions feed and verified against the tape; prices are adjusted
+  at compute time (adjusted = raw / k), so raw bars are never mutated.
+
+## Pipeline mode
+
+When `SUPABASE_DB_URL` is set, the Python pipeline in [../pipeline](../pipeline)
+owns ingestion and analytics, and this server stops doing both — running two
+ingest paths against one database would have them overwrite each other. What
+changes:
+
+| | self-ingest (legacy) | pipeline mode |
+| --- | --- | --- |
+| EOD ingest + analytics | this server, 18:45/19:30 IST | GitHub Actions, 19:45 IST |
+| bar history | `daily_bars` in the local DB | Parquet on Cloudflare R2 |
+| `/api/stocks/:sym/candles` | adjusts `daily_bars` on the fly | reads the pre-adjusted `stock_candles` cache |
+| constituent sync | this server, Mondays | pipeline, every EOD run |
+
+Live index quotes, Kite SSO, watchlist news and the FII/DII fetch stay here in
+both modes — none of them are part of the lake.

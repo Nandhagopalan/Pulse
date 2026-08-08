@@ -39,8 +39,18 @@ export const config = {
   kiteRedirectUrl: env('KITE_REDIRECT_URL', 'http://localhost:5173/auth/kite/callback'),
   /** Where to send the browser after a successful login. */
   appUrl: env('APP_URL', 'http://localhost:5173'),
-  /** Optional: postgres://... — falls back to SQLite in server/data/pulse.db. */
-  databaseUrl: env('DATABASE_URL'),
+  /** Optional: postgres://... — falls back to SQLite in server/data/pulse.db.
+   *  SUPABASE_DB_URL is the same thing under the name Supabase uses. */
+  databaseUrl: env('DATABASE_URL') || env('SUPABASE_DB_URL'),
+  /**
+   * When true, the Python pipeline (pipeline/) owns ingestion and analytics:
+   * it writes the derived tables into Supabase and keeps the 20-year bar history
+   * on R2. The Node server then only serves and does live quotes — running both
+   * ingest paths against one database would have them overwrite each other.
+   * Defaults on whenever a Supabase URL is configured; set PIPELINE_MODE=0 to
+   * force the legacy self-ingesting behaviour.
+   */
+  pipelineMode: Boolean(env('SUPABASE_DB_URL')) && env('PIPELINE_MODE', '1') !== '0',
   /** Number of trading sessions of history to backfill on bootstrap.
    *  ~2500 ≈ 10 years, which is what true all-time-high detection needs. */
   backfillSessions: Number(env('BACKFILL_SESSIONS', '2500')),

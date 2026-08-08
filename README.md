@@ -9,7 +9,8 @@ Zerodha Kite SSO.
 | Path | What it is |
 | --- | --- |
 | `src/` | React terminal UI (Breadth, Charts, Sectors, Highs, Drawdown, Watchlist tabs) |
-| `server/` | Backend: NSE EOD ingestion, analytics engine, Kite Connect SSO, REST API — see [server/README.md](server/README.md) |
+| `server/` | Backend: Kite Connect SSO, REST API, live quotes — see [server/README.md](server/README.md) |
+| `pipeline/` | Python batch pipeline: NSE → R2 Parquet lake → DuckDB analytics → Supabase — see [pipeline/README.md](pipeline/README.md) |
 
 ## Quick start
 
@@ -49,22 +50,38 @@ Sign in with Zerodha at the gate. Kite access tokens expire daily, so expect one
 login per trading day — the same token powers live index quotes during market hours.
 If the backend is unreachable the UI falls back to clearly-badged demo data.
 
-## Data pipeline (daily, IST)
+## Architecture
 
 ```
-08:30  reference sync (index constituents, sector mapping)
-09:15  live index quote polling (Kite REST)
-18:45  EOD chain: UDiFF bhavcopy → MTO delivery → index closes → FII/DII flows
-19:30  analytics: corporate-action adjustment, EMAs, breadth counters,
-       52w/ATH distances, Mansfield RS, sector composite scores
+NSE archives ──► Cloudflare R2 ──► DuckDB ──► Supabase ──► Node API ──► React UI
+  bhavcopy       Parquet lake      analytics   ~2.5k rows    + Kite SSO
+  (per session)  19 yrs, ~8M bars  (nightly)   (a few MB)    + live quotes
 ```
 
-Corporate actions (splits/bonuses) are detected automatically from official
-prev-close discontinuities and applied as retroactive adjustment factors — raw
-bars are never mutated.
+Storage is split because the two halves have opposite needs. Nineteen years of
+daily bars is ~1.2 GB in Postgres — past Supabase's free tier — but ~250 MB as
+compressed Parquet on R2, where egress is free. Only the *derived* state per
+symbol reaches the database the UI queries, which keeps it small and indexed.
+
+DuckDB in the middle is a library, not a service: it runs inside the nightly job,
+scans the Parquet on R2, emits ~2,500 rows, and exits. Nothing to host.
+
+The batch half lives in [pipeline/](pipeline/) and runs nightly on GitHub Actions
+at 19:45 IST. The Node server no longer ingests when `SUPABASE_DB_URL` is set —
+it serves the API, Kite SSO, and live index quotes during market hours.
+
+### Corporate actions
+
+Splits and bonuses re-base prices overnight; left alone, RELIANCE reads as a 50%
+crash on 2017-09-07. Ratios come from NSE's corporate actions feed and are each
+verified against the actual close-to-close gap at the ex-date before being
+applied, so a mis-parsed label or an announced-but-never-executed action is
+recorded rather than silently distorting every ATH downstream. Raw bars are never
+mutated — adjustment happens at compute time (`adjusted = raw / k`).
 
 ## Storage
 
-SQLite by default (zero setup, `server/data/pulse.db`). Set
-`DATABASE_URL=postgres://...` to run the identical schema on
-PostgreSQL/TimescaleDB for production.
+Set `SUPABASE_DB_URL` (Postgres URI) and the pipeline's `R2_*` keys in
+`.env.local`. Without them the server falls back to its legacy self-ingesting
+mode on SQLite at `server/data/pulse.db`, which needs no setup but only carries
+the history it downloads itself.

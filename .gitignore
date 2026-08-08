@@ -27,3 +27,8 @@ dist-ssr
 .env
 .env.*
 server/data/
+
+# Python pipeline
+.venv/
+__pycache__/
+*.pyc

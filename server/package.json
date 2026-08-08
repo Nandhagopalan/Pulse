@@ -11,6 +11,10 @@
     "analytics": "node src/jobs.ts analytics"
   },
   "dependencies": {
-    "fflate": "^0.8.2"
+    "fflate": "^0.8.2",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.21.0"
   }
 }

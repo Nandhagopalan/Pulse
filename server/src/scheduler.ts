@@ -48,15 +48,17 @@ async function tick(): Promise<void> {
     }
   }
 
-  // Pre-market reference sync (constituents weekly, Monday).
-  if (weekday && mins >= 510 && preMarketRanFor !== today) {
+  // Pre-market reference sync (constituents weekly, Monday). In pipeline mode
+  // the EOD job refreshes constituents itself.
+  if (!config.pipelineMode && weekday && mins >= 510 && preMarketRanFor !== today) {
     preMarketRanFor = today;
     if (istNow().getUTCDay() === 1) await guarded('constituents', ingestIndexConstituents);
   }
 
   // EOD chain — NSE publishes files 18:00–19:30 IST; we start at 18:45 and
-  // retry every tick until the bhavcopy shows up.
-  if (weekday && mins >= 1125 && eodRanFor !== today) {
+  // retry every tick until the bhavcopy shows up. Skipped in pipeline mode,
+  // where the scheduled Python job does this and writes the results to Supabase.
+  if (!config.pipelineMode && weekday && mins >= 1125 && eodRanFor !== today) {
     await guarded('eod', async () => {
       const ok = await runEodIngest(today);
       if (ok) {
@@ -69,6 +71,14 @@ async function tick(): Promise<void> {
 }
 
 export async function bootCatchup(): Promise<void> {
+  if (config.pipelineMode) {
+    const last = await metaGet('last_analytics_date');
+    console.log(`[boot] pipeline mode — ingest and analytics are owned by pipeline/;`
+      + ` latest published session: ${last ?? 'none yet'}`);
+    void ingestFiiDii(); // still ours: not part of the lake
+    return;
+  }
+
   const last = await metaGet('last_ingested_session');
   if (!last) {
     console.log(`[boot] empty database — starting bootstrap backfill of ${config.backfillSessions} sessions`);

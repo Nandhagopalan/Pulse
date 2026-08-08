@@ -131,6 +131,27 @@ export function registerApiRoutes(router: Router): void {
       });
     }
 
+    if (config.pipelineMode) {
+      /*
+       * Pipeline mode: candles come pre-adjusted from the cache the EOD job
+       * writes. The 20-year bar history lives on R2 as Parquet — too large for
+       * this database, and a columnar scan is the wrong shape for a request that
+       * wants one symbol's recent tail.
+       */
+      const rows = await db.all<{ data: string }>(
+        'SELECT data FROM stock_candles WHERE symbol = ?', [sym],
+      );
+      if (!rows.length) return json(ctx, 404, { error: 'unknown_symbol' });
+      const c = JSON.parse(rows[0].data) as {
+        d: string[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[];
+      };
+      const from = Math.max(0, c.d.length - n);
+      const candles = c.d.slice(from).map((d, i) => ({
+        d, o: c.o[from + i], h: c.h[from + i], l: c.l[from + i], c: c.c[from + i], v: c.v[from + i],
+      }));
+      return json(ctx, 200, { sym, candles });
+    }
+
     const rows = await db.all<{ date: string; open: number; high: number; low: number; close: number; volume: number }>(
       'SELECT date, open, high, low, close, volume FROM daily_bars WHERE symbol = ? ORDER BY date DESC LIMIT ?',
       [sym, n],
@@ -178,17 +199,22 @@ export function registerApiRoutes(router: Router): void {
 
   router.get('/api/status', requireAuth(async ctx => {
     const db = await getDb();
-    const barCount = await db.all<{ c: number; days: number }>(
-      'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM daily_bars',
-    );
+    // In pipeline mode `daily_bars` does not exist here — the history is on R2 —
+    // so report the coverage of what this database actually serves.
+    const bars = config.pipelineMode
+      ? (await db.all<{ c: number; days: number }>(
+          'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM stock_metrics'))[0]
+      : (await db.all<{ c: number; days: number }>(
+          'SELECT COUNT(*) AS c, COUNT(DISTINCT date) AS days FROM daily_bars'))[0];
     const log = await db.all(
       'SELECT ts, job, date, status, detail FROM ingest_log ORDER BY ts DESC LIMIT 25',
     );
     json(ctx, 200, {
       marketOpen: isMarketOpen(),
+      mode: config.pipelineMode ? 'pipeline' : 'self-ingest',
       lastIngestedSession: await metaGet('last_ingested_session'),
       lastAnalyticsDate: await metaGet('last_analytics_date'),
-      bars: barCount[0],
+      bars,
       backfill: backfillProgress,
       recentLog: log,
     });
