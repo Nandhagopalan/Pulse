@@ -3,5 +3,29 @@
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
-  ]
+  ],
+  /*
+   * `files: []` means these options compile nothing here — the referenced
+   * projects carry their own, and `tsc -b` ignores what is written below.
+   *
+   * They exist for Vercel. Its function builder type-checks api/pulse.ts
+   * against *this* file, and with no compilerOptions it fell back to defaults,
+   * where `import './config.ts'` is an error (TS5097). The function then fails
+   * to build while the static build succeeds, so the site serves and every
+   * function route returns FUNCTION_INVOCATION_FAILED.
+   *
+   * The explicit `.ts` specifiers are not incidental: Node's native type
+   * stripping, which is how server/ runs with no build step, requires them.
+   * So the resolver is told to accept them rather than the imports rewritten.
+   */
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "types": ["node"]
+  }
 }
