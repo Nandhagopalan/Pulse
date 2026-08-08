@@ -32,13 +32,12 @@ function ProfileField({ label, value, onCommit, prefix }: {
   );
 }
 
-export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, dataSource, asOf, onRefresh, onLogout }: {
+export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout }: {
   title: string;
   profile: Profile;
   updateProfile: (p: Partial<Prefs>) => void;
   watchCount: number;
   sessionUser?: SessionUser | null;
-  dataSource?: 'live' | 'demo';
   asOf?: string | null;
   onRefresh?: () => void;
   onLogout?: () => void;
@@ -82,9 +81,7 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
 
       <Mono size={11.5} color={T.faint}>{clock}</Mono>
 
-      {dataSource === 'live'
-        ? pill(T.amberSoft, T.amber, T.amber, 'NSE' + (asOf ? ' · ' + asOf.slice(5) : ''), 'NSE EOD data' + (asOf ? ' · as of ' + asOf : ''))
-        : pill(T.cardAlt, T.faint, T.muted, 'Demo data', 'Synthetic demo data — backend not connected')}
+      {pill(T.amberSoft, T.amber, T.amber, 'NSE' + (asOf ? ' · ' + asOf.slice(5) : ''), 'NSE EOD data' + (asOf ? ' · as of ' + asOf : ''))}
 
       {status.open
         ? pill(T.upSoft, T.up, T.up, status.label)

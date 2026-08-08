@@ -5,7 +5,7 @@ import { useProfile } from './lib/profile';
 import { useRoute, buildHash } from './lib/router';
 import { useMarket } from './lib/useMarket';
 import { addToWatchlist, fetchWatchlist, importWatchlist, logout, removeFromWatchlist } from './lib/api';
-import { LoginGate, BootstrapScreen } from './components/LoginGate';
+import { LoginGate, BootstrapScreen, OfflineScreen } from './components/LoginGate';
 import { Mono, Sparkline, ghostBtn, inkBtn, inputStyle } from './components/ui';
 import { Sidebar, type NavItem } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -205,7 +205,10 @@ export default function App() {
     return <div style={{ minHeight: '100vh', background: T.bg }} />;
   }
   if (market.auth === 'anon') {
-    return <LoginGate onDemo={market.enableDemo} />;
+    return <LoginGate />;
+  }
+  if (market.auth === 'offline') {
+    return <OfflineScreen onRetry={market.refresh} />;
   }
   if (!market.data) {
     return <BootstrapScreen backfill={market.backfill ?? { running: true, done: 0, target: 0, currentDate: null, error: null }} />;
@@ -280,7 +283,7 @@ export default function App() {
           <TopBar
             title={TAB_META[tab].label}
             profile={profile} updateProfile={update} watchCount={watchCount}
-            sessionUser={market.user} dataSource={market.source} asOf={market.asOf}
+            sessionUser={market.user} asOf={market.asOf}
             onRefresh={() => market.refresh()}
             onLogout={() => { void logout().then(() => window.location.reload()); }}
           />

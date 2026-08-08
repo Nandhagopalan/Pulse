@@ -26,28 +26,42 @@ export class Router {
   post(path: string, handler: Handler) { this.on('POST', path, handler); }
   del(path: string, handler: Handler) { this.on('DELETE', path, handler); }
 
+  /**
+   * Match on specificity, not registration order: among the routes that fit,
+   * the one with the most literal segments wins. `/api/watchlist/import` and
+   * `/api/watchlist/:sym` both match `POST /api/watchlist/import`, and taking
+   * whichever was registered first is a trap — it silently stored a watchlist
+   * entry called "IMPORT" instead of importing anything, and left the caller a
+   * 200 to confirm it.
+   */
   async dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter(Boolean);
+
+    let best: { route: Route; params: Record<string, string>; literals: number } | null = null;
     for (const r of this.routes) {
       if (r.method !== req.method || r.parts.length !== parts.length) continue;
       const params: Record<string, string> = {};
+      let literals = 0;
       let ok = true;
       for (let i = 0; i < parts.length; i++) {
         if (r.parts[i].startsWith(':')) params[r.parts[i].slice(1)] = decodeURIComponent(parts[i]);
         else if (r.parts[i] !== parts[i]) { ok = false; break; }
+        else literals++;
       }
       if (!ok) continue;
-      const ctx: Ctx = { req, res, url, params, cookies: parseCookies(req.headers.cookie ?? '') };
-      try {
-        await r.handler(ctx);
-      } catch (err) {
-        console.error(`[http] ${req.method} ${url.pathname} failed:`, err);
-        if (!res.headersSent) json(ctx, 500, { error: 'internal_error' });
-      }
-      return;
+      if (!best || literals > best.literals) best = { route: r, params, literals };
     }
-    json({ res } as Ctx, 404, { error: 'not_found' });
+
+    if (!best) return json({ res } as Ctx, 404, { error: 'not_found' });
+
+    const ctx: Ctx = { req, res, url, params: best.params, cookies: parseCookies(req.headers.cookie ?? '') };
+    try {
+      await best.route.handler(ctx);
+    } catch (err) {
+      console.error(`[http] ${req.method} ${url.pathname} failed:`, err);
+      if (!res.headersSent) json(ctx, 500, { error: 'internal_error' });
+    }
   }
 }
 
