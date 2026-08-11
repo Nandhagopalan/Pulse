@@ -29,17 +29,24 @@ function Icon({ name, size = 15 }: { name: keyof typeof ICONS; size?: number }) 
   );
 }
 
-export function Sidebar({ items, active, onNav, collapsed, onToggle, userName, userSub }: {
+// The signed-in user is shown once, in the TopBar profile menu; the rail used
+// to repeat it in a footer, which was redundant.
+export function Sidebar({ items, active, onNav, collapsed, onToggle, isMobile, open, onClose }: {
   items: NavItem[];
   active: string;
   onNav: (id: string) => void;
   collapsed: boolean;
   onToggle: () => void;
-  userName: string;
-  userSub: string;
+  /** Phone layout: the rail becomes an overlay drawer over the content. */
+  isMobile?: boolean;
+  open?: boolean;
+  onClose?: () => void;
 }) {
+  // On a phone the rail is never collapsed-to-icons — it is either off-canvas
+  // or fully open, so labels are always readable when it is showing.
+  const isCollapsed = isMobile ? false : collapsed;
   const asideStyle: CSSProperties = {
-    width: collapsed ? 64 : 232,
+    width: isCollapsed ? 64 : 232,
     flexShrink: 0,
     height: '100vh',
     position: 'sticky',
@@ -56,65 +63,66 @@ export function Sidebar({ items, active, onNav, collapsed, onToggle, userName, u
     color: T.faint, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
   };
 
-  return (
-    <aside style={asideStyle}>
+  const aside = (
+    <aside
+      className={isMobile ? 'sidebar-drawer' + (open ? ' open' : '') : undefined}
+      style={asideStyle}
+      aria-hidden={isMobile && !open ? true : undefined}
+    >
       {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', height: 56, padding: collapsed ? 0 : '0 16px', borderBottom: '1px solid ' + T.borderSoft }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between', height: 56, padding: isCollapsed ? 0 : '0 16px', borderBottom: '1px solid ' + T.borderSoft }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <img src={ikigaiIcon} alt="Ikigai" style={{ width: 30, height: 30, borderRadius: 9, objectFit: 'cover', display: 'block', boxShadow: 'inset 0 0 0 1px ' + T.border, background: T.card, mixBlendMode: 'multiply' }} />
-          {!collapsed && <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink }}>Pulse</span>}
+          {!isCollapsed && <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink }}>Pulse</span>}
         </div>
-        {!collapsed && (
+        {isMobile ? (
+          <button style={{ ...iconBtn, width: 34, height: 34, fontSize: 16 }} onClick={onClose} title="Close menu" aria-label="Close menu">✕</button>
+        ) : !isCollapsed && (
           <button style={iconBtn} onClick={onToggle} title="Collapse"><Icon name="chevron" size={13} /></button>
         )}
       </div>
 
       {/* Nav */}
       <nav className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {collapsed && (
+        {isCollapsed && (
           <button style={{ ...iconBtn, width: 40, height: 40, margin: '0 auto 4px', transform: 'rotate(180deg)' }} onClick={onToggle} title="Expand"><Icon name="chevron" size={13} /></button>
         )}
         {items.map(it => {
           const isActive = it.id === active;
           const btn: CSSProperties = {
-            display: 'flex', alignItems: 'center', gap: 12, height: 38,
-            padding: collapsed ? 0 : '0 12px', width: collapsed ? 40 : '100%',
-            justifyContent: collapsed ? 'center' : 'flex-start', margin: collapsed ? '0 auto' : 0,
+            display: 'flex', alignItems: 'center', gap: 12, height: isMobile ? 44 : 38,
+            padding: isCollapsed ? 0 : '0 12px', width: isCollapsed ? 40 : '100%',
+            justifyContent: isCollapsed ? 'center' : 'flex-start', margin: isCollapsed ? '0 auto' : 0,
             border: 0, background: isActive ? T.brand50 : 'transparent', borderRadius: 9,
             color: isActive ? T.brand600 : T.text, fontWeight: isActive ? 600 : 400,
-            fontFamily: T.sans, fontSize: 13, textAlign: 'left', cursor: 'pointer', transition: '.12s',
+            fontFamily: T.sans, fontSize: isMobile ? 14 : 13, textAlign: 'left', cursor: 'pointer', transition: '.12s',
           };
           return (
             <button
               key={it.id}
               style={btn}
               title={it.label}
-              onClick={() => onNav(it.id)}
+              onClick={() => { onNav(it.id); onClose?.(); }}
               onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = T.cardAlt; }}
               onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
             >
               <Icon name={it.icon} size={15} />
-              {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</span>}
-              {!collapsed && it.count != null && (
+              {!isCollapsed && <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</span>}
+              {!isCollapsed && it.count != null && (
                 <span style={{ fontSize: 11, color: isActive ? T.brand : T.faint, fontFamily: T.mono }}>{it.count}</span>
               )}
             </button>
           );
         })}
       </nav>
-
-      {/* User footer */}
-      <div style={{ flexShrink: 0, padding: collapsed ? '12px 0' : 12, borderTop: '1px solid ' + T.borderSoft, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 10 }}>
-        <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0, background: 'linear-gradient(135deg,#3184CB,#1b3d61)', boxShadow: '0 0 0 1.5px #fff, 0 0 0 2px ' + T.border }}>
-          {userName.split(/\s+/).slice(0, 2).map(s => s[0]?.toUpperCase()).join('')}
-        </span>
-        {!collapsed && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userName}</div>
-            <div style={{ fontSize: 11, color: T.faint, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userSub}</div>
-          </div>
-        )}
-      </div>
     </aside>
+  );
+
+  if (!isMobile) return aside;
+  return (
+    <>
+      {open && <div className="sidebar-scrim" onClick={onClose} aria-hidden="true" />}
+      {aside}
+    </>
   );
 }

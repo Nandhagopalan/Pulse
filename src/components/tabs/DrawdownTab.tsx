@@ -9,10 +9,14 @@ import { useSort, sortLabel } from '../../lib/sort';
 import type { SortSpec } from '../../lib/sort';
 import { useQueryParam } from '../../lib/router';
 import type { Route } from '../../lib/router';
+import type { Media } from '../../lib/useMedia';
 
 type Navigate = (target: string, opts?: { replace?: boolean }) => void;
 
 const GRID = '34px 1.1fr 1fr 0.8fr 0.7fr 1.3fr 1.1fr';
+
+/** Below this the meter column and status chip collide; scroll instead. */
+const MIN_WIDTH = 820;
 
 const ALL = 'All sectors';
 
@@ -53,13 +57,14 @@ const BUCKETS: { key: string; label: string; color: string }[] = [
   { key: 'deep', label: 'Deep >40%', color: T.ink },
 ];
 
-export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
+export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen, media }: {
   D: MarketData;
   route: Route;
   navigate: Navigate;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
+  media: Media;
 }) {
   const [sector, setSectorParam] = useQueryParam(route, navigate, 'sector', ALL);
   const [bucketParam, setBucketParam] = useQueryParam(route, navigate, 'bucket', '');
@@ -156,7 +161,7 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
         )}
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: media.isMobile ? '1fr' : '1.1fr 1fr', gap: 16 }}>
         <Card style={{ padding: '20px 22px' }}>
           <Label>How far off all-time highs{sector === ALL ? '' : ' · ' + sector}</Label>
           <div style={{ display: 'flex', height: 10, borderRadius: 99, overflow: 'hidden', marginTop: 16, background: T.borderSoft }}>
@@ -192,9 +197,9 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
                   key={s.name}
                   onClick={() => setSector(active ? ALL : s.name)}
                   title="Filter the table to this sector"
-                  style={{ display: 'grid', gridTemplateColumns: '96px 1fr 40px 52px', alignItems: 'center', gap: 12, cursor: 'pointer', borderRadius: 6, padding: '2px 4px', margin: '0 -4px', background: active ? T.borderSoft : 'transparent' }}
+                  style={{ display: 'grid', gridTemplateColumns: media.isMobile ? '84px minmax(0,1fr) 32px 50px' : '96px 1fr 40px 52px', alignItems: 'center', gap: media.isMobile ? 8 : 12, cursor: 'pointer', borderRadius: 6, padding: '2px 4px', margin: '0 -4px', background: active ? T.borderSoft : 'transparent' }}
                 >
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: active ? T.navy : T.ink }}>{s.name}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: active ? T.navy : T.ink, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                   <Meter pct={s.avg / maxAvg * 100} color={s.avg < 8 ? T.navy : s.avg < 20 ? T.amber : T.down} height={7} />
                   <Mono size={11.5} color={T.faint} style={{ textAlign: 'right', display: 'inline-block' }}>{s.count}</Mono>
                   <Mono size={12.5} weight={600} color={s.avg < 8 ? T.navy : s.avg < 20 ? T.amber : T.down} style={{ textAlign: 'right', display: 'inline-block' }}>-{s.avg.toFixed(1)}%</Mono>
@@ -206,7 +211,7 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <TableShell>
+        <TableShell minWidth={MIN_WIDTH}>
           <TableHead grid={GRID} cols={COLS} sort={sort} onSort={onSort} />
           {sorted.map(s => {
             const b = ddBucket(s.distATH);
@@ -219,7 +224,7 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen }: {
                 onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = T.cardAlt; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
               >
-                <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, color: starred ? T.amber : T.border, padding: 0, lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
+                <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" aria-label={starred ? 'Remove from watchlist' : 'Add to watchlist'} style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, color: starred ? T.amber : T.border, padding: '7px 6px', margin: '-7px -6px', lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
                 <Mono size={13} weight={600}>{s.sym}</Mono>
                 <div style={{ color: T.muted, fontSize: 12.5 }}>{s.sector}</div>
                 <div style={{ textAlign: 'right' }}><Mono size={12.5}>{fmtPrice(s.price)}</Mono></div>

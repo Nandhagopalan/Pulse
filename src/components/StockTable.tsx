@@ -8,6 +8,13 @@ import type { SortSpec, SortState } from '../lib/sort';
 
 const GRID = '34px 1.1fr 1.1fr 0.85fr 0.6fr 0.6fr 0.75fr 0.85fr';
 
+/**
+ * Below this width the eight columns stop being readable, so the table keeps
+ * its full width and scrolls sideways inside its own card instead of letting
+ * the columns collapse into each other.
+ */
+export const TABLE_MIN_WIDTH = 760;
+
 export function stockTag(s: Stock) {
   if (s.isATH) return <Tag color={T.card} bg={T.ink}>ATH</Tag>;
   if (s.is52) return <Tag color={T.up} bg={T.upSoft}>52W HIGH</Tag>;
@@ -16,10 +23,19 @@ export function stockTag(s: Stock) {
   return <Tag color={T.muted} bg={T.borderSoft}>OFF HIGHS</Tag>;
 }
 
-export function TableShell({ children }: { children: ReactNode }) {
+/**
+ * Card around a grid table. The inner track holds the table at its natural
+ * width and scrolls horizontally when the viewport is narrower, which keeps
+ * every row aligned to the header instead of squeezing columns to zero.
+ */
+export function TableShell({ children, minWidth = TABLE_MIN_WIDTH }: { children: ReactNode; minWidth?: number }) {
   return (
     <div style={{ background: T.card, borderRadius: T.radius, overflow: 'hidden', boxShadow: T.shadow + ', inset 0 0 0 1px ' + T.borderSoft }}>
-      {children}
+      <div className="table-scroll">
+        <div style={{ minWidth }}>
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
@@ -52,8 +68,11 @@ export function TableHead({ grid, cols, sort, onSort }: {
                 onClick={() => onSort!(c.key!)}
                 title={'Sort by ' + c.label}
                 style={{
+                  // Vertical padding (and the negative margin that cancels it)
+                  // grows the tap target to ~30px without moving the label.
                   appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer',
-                  padding: 0, fontFamily: T.sans, color: active ? T.ink : T.faint,
+                  padding: '9px 0', margin: '-9px 0',
+                  fontFamily: T.sans, color: active ? T.ink : T.faint,
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   flexDirection: c.align === 'right' ? 'row-reverse' : 'row',
                   ...base,
@@ -122,7 +141,7 @@ export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSor
             onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = T.cardAlt; }}
             onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
           >
-            <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, color: starred ? T.amber : T.border, padding: 0, lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
+            <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" aria-label={starred ? 'Remove from watchlist' : 'Add to watchlist'} style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 15, color: starred ? T.amber : T.border, padding: '7px 6px', margin: '-7px -6px', lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
             <Mono size={13} weight={600}>{s.sym}</Mono>
             <div style={{ color: T.muted, fontSize: 12.5 }}>{s.sector}</div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5}>{fmtPrice(s.price)}</Mono></div>

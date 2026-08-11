@@ -15,6 +15,11 @@ type Navigate = (target: string, opts?: { replace?: boolean }) => void;
 const GRID = '18px 1.5fr 0.7fr 0.9fr 1.4fr 0.8fr 0.7fr 1.2fr';
 const SUB = '34px 1.1fr 0.9fr 0.7fr 0.7fr 0.9fr 0.9fr';
 
+// Widths below which these column sets stop being legible; the tables scroll
+// sideways rather than compress. The nested one is narrower by its indent.
+const MIN_WIDTH = 860;
+const SUB_MIN_WIDTH = 700;
+
 const COLS: HeadCol[] = [
   { label: '' },
   { key: 'name', label: 'Sector' },
@@ -105,13 +110,15 @@ function SectorDetail({ stocks, side, setSide, watch, toggle, onOpen }: {
           );
         })}
         <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', height: 6, width: 160, borderRadius: 99, overflow: 'hidden', background: T.borderSoft }}>
+        <div style={{ display: 'flex', height: 6, width: 160, maxWidth: '100%', flexShrink: 0, borderRadius: 99, overflow: 'hidden', background: T.borderSoft }}>
           <div style={{ width: (advList.length / Math.max(1, stocks.length) * 100) + '%', background: T.up, opacity: 0.85 }} />
           <div style={{ width: (decList.length / Math.max(1, stocks.length) * 100) + '%', background: T.down, opacity: 0.85 }} />
         </div>
       </div>
 
       <div style={{ marginTop: 12, background: T.card, borderRadius: 10, overflow: 'hidden', boxShadow: 'inset 0 0 0 1px ' + T.borderSoft }}>
+        <div className="table-scroll">
+        <div style={{ minWidth: SUB_MIN_WIDTH }}>
         <TableHead grid={SUB} cols={SUB_COLS} sort={sort} onSort={onSort} />
         {sorted.map(s => {
           const starred = !!watch[s.sym];
@@ -123,7 +130,7 @@ function SectorDetail({ stocks, side, setSide, watch, toggle, onOpen }: {
               onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = T.cardAlt; }}
               onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
             >
-              <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, color: starred ? T.amber : T.border, padding: 0, lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
+              <button onClick={e => { e.stopPropagation(); toggle(s.sym); }} title="Watchlist" aria-label={starred ? 'Remove from watchlist' : 'Add to watchlist'} style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, color: starred ? T.amber : T.border, padding: '7px 6px', margin: '-7px -6px', lineHeight: 1 }}>{starred ? '★' : '☆'}</button>
               <Mono size={12.5} weight={600}>{s.sym}</Mono>
               <div style={{ textAlign: 'right' }}><Mono size={12}>{fmtPrice(s.price)}</Mono></div>
               <div style={{ textAlign: 'right' }}><Mono size={12} color={dirColor(s.chg1d)}>{fmtPct(s.chg1d)}</Mono></div>
@@ -138,6 +145,8 @@ function SectorDetail({ stocks, side, setSide, watch, toggle, onOpen }: {
             No {side === 'adv' ? 'advancing' : 'declining'} stocks in this sector today.
           </div>
         )}
+        </div>
+        </div>
       </div>
       <div style={{ padding: '10px 2px', fontSize: 11.5, color: T.faint }}>
         {sorted.length} of {stocks.length} tracked constituents · {sortLabel(sort, subLabels)}
@@ -183,7 +192,7 @@ export function SectorsTab({ D, route, navigate, watch, toggle, onOpen }: {
 
   return (
     <div style={{ marginTop: 18 }}>
-      <TableShell>
+      <TableShell minWidth={MIN_WIDTH}>
         <TableHead grid={GRID} cols={COLS} sort={sort} onSort={onSort} />
         {sorted.map(s => {
           const expanded = open === s.name;

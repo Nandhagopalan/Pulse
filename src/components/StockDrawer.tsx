@@ -38,7 +38,7 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(35,43,56,0.28)', zIndex: 50, animation: 'fade-in 140ms ease' }} />
-      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, maxWidth: '92vw', background: T.card, boxShadow: '-12px 0 40px rgba(15,23,42,0.10)', zIndex: 51, overflowY: 'auto', padding: '22px 26px 32px', animation: 'drawer-in 180ms ease' }}>
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, maxWidth: '100vw', background: T.card, boxShadow: '-12px 0 40px rgba(15,23,42,0.10)', zIndex: 51, overflowY: 'auto', overflowX: 'hidden', padding: 'clamp(16px, 4vw, 26px)', paddingBottom: 32, animation: 'drawer-in 180ms ease' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -53,7 +53,7 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
           <Mono size={24} weight={600}>{fmtPrice(stock.price)}</Mono>
           <Mono size={13} color={dirColor(stock.chg1d)} weight={600}>{fmtPct(stock.chg1d)} 1D</Mono>
           <Mono size={13} color={dirColor(stock.chg1w)} weight={600}>{fmtPct(stock.chg1w)} 1W</Mono>
@@ -72,7 +72,7 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
           <path d={chart.ub} fill={T.up} />
           <path d={chart.db} fill={T.down} />
         </svg>
-        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: T.muted }}>
+        <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: T.muted, flexWrap: 'wrap' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.amber }} />10 EMA {chart.ema10Last}</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.navy }} />50 EMA {chart.ema50Last}</span>
           <span style={{ color: T.faint }}>60 sessions · sample</span>

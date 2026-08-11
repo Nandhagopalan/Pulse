@@ -34,8 +34,8 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
           {modes.map(m => {
             const active = highMode === m.id;
             return (

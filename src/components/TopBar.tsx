@@ -32,7 +32,7 @@ function ProfileField({ label, value, onCommit, prefix }: {
   );
 }
 
-export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout }: {
+export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout, isMobile, isTight, onOpenNav }: {
   title: string;
   profile: Profile;
   updateProfile: (p: Partial<Prefs>) => void;
@@ -41,6 +41,10 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
   asOf?: string | null;
   onRefresh?: () => void;
   onLogout?: () => void;
+  isMobile?: boolean;
+  /** Too narrow for the clock and session pills, even if not a phone. */
+  isTight?: boolean;
+  onOpenNav?: () => void;
 }) {
   const [now, setNow] = useState(() => new Date());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -75,26 +79,40 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
   );
 
   return (
-    <header style={{ height: 56, flexShrink: 0, position: 'sticky', top: 0, zIndex: 15, background: 'rgba(247,246,243,0.82)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid ' + T.border, display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px' }}>
-      <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink }}>{title}</div>
+    <header style={{ height: 56, flexShrink: 0, position: 'sticky', top: 0, zIndex: 15, background: 'rgba(247,246,243,0.82)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid ' + T.border, display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16, padding: isMobile ? '0 14px' : '0 24px' }}>
+      {isMobile && (
+        <button
+          onClick={onOpenNav}
+          title="Menu"
+          aria-label="Open navigation menu"
+          style={{ appearance: 'none', border: 0, background: 'transparent', cursor: 'pointer', color: T.ink, width: 34, height: 34, marginLeft: -6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+        </button>
+      )}
+      <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
       <div style={{ flex: 1 }} />
 
-      <Mono size={11.5} color={T.faint}>{clock}</Mono>
+      {/* The clock and session pills are context, not controls — on a narrow
+          header the width is better spent on the title and the real actions.
+          A landscape phone clears the mobile breakpoint but still has no room. */}
+      {!isTight && <Mono size={11.5} color={T.faint}>{clock}</Mono>}
 
-      {pill(T.amberSoft, T.amber, T.amber, 'NSE' + (asOf ? ' · ' + asOf.slice(5) : ''), 'NSE EOD data' + (asOf ? ' · as of ' + asOf : ''))}
+      {!isTight && pill(T.amberSoft, T.amber, T.amber, 'NSE' + (asOf ? ' · ' + asOf.slice(5) : ''), 'NSE EOD data' + (asOf ? ' · as of ' + asOf : ''))}
 
-      {status.open
+      {!isTight && (status.open
         ? pill(T.upSoft, T.up, T.up, status.label)
-        : pill(T.card, T.faint, T.text, status.label)}
+        : pill(T.card, T.faint, T.text, status.label))}
 
       {onRefresh && (
         <button
           onClick={onRefresh}
           title="Refresh"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 12px', borderRadius: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + T.border, color: T.text, fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+          aria-label="Refresh"
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 32, width: isMobile ? 34 : undefined, padding: isMobile ? 0 : '0 12px', borderRadius: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + T.border, color: T.text, fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
         >
           <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-          Refresh
+          {!isMobile && 'Refresh'}
         </button>
       )}
 
@@ -102,16 +120,25 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
         <button
           onClick={() => setMenuOpen(v => !v)}
           title="Profile"
-          style={{ appearance: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + (menuOpen ? T.faint : T.border), borderRadius: 99, padding: '3px 12px 3px 4px', height: 32 }}
+          style={{ appearance: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + (menuOpen ? T.faint : T.border), borderRadius: 99, padding: isTight ? 3 : '3px 12px 3px 4px', height: 32, flexShrink: 0 }}
         >
-          <span style={{ width: 24, height: 24, borderRadius: 99, background: 'linear-gradient(135deg,#3184CB,#1b3d61)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700 }}>
+          <span style={{ width: 24, height: 24, borderRadius: 99, background: 'linear-gradient(135deg,#3184CB,#1b3d61)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, flexShrink: 0 }}>
             {(sessionUser?.name ?? profile.name).charAt(0).toUpperCase()}
           </span>
-          <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{sessionUser?.name ?? profile.name}</span>
+          {!isTight && <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink }}>{sessionUser?.name ?? profile.name}</span>}
         </button>
 
         {menuOpen && (
-          <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 320, background: T.card, border: '1px solid ' + T.border, borderRadius: 14, boxShadow: T.shadowPop, padding: 20, animation: 'fade-in 120ms ease' }}>
+          <div style={{
+            // On a phone the 320px card would hang off the right edge, so it
+            // anchors to the viewport and spans the width instead.
+            ...(isMobile
+              ? { position: 'fixed' as const, left: 12, right: 12, top: 60, width: 'auto' }
+              : { position: 'absolute' as const, right: 0, top: 'calc(100% + 8px)', width: 320 }),
+            maxWidth: 'calc(100vw - 24px)',
+            background: T.card, border: '1px solid ' + T.border, borderRadius: 14,
+            boxShadow: T.shadowPop, padding: isMobile ? 16 : 20, animation: 'fade-in 120ms ease',
+          }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>{sessionUser?.name ?? profile.name}</div>

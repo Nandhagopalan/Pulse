@@ -4,6 +4,7 @@ import { areaLine } from './lib/svg';
 import { useProfile } from './lib/profile';
 import { useRoute, buildHash } from './lib/router';
 import { useMarket } from './lib/useMarket';
+import { useMedia, cols } from './lib/useMedia';
 import { addToWatchlist, fetchWatchlist, importWatchlist, logout, removeFromWatchlist } from './lib/api';
 import { LoginGate, BootstrapScreen, OfflineScreen } from './components/LoginGate';
 import { Mono, Sparkline, ghostBtn, inkBtn, inputStyle } from './components/ui';
@@ -138,7 +139,10 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [addingQuote, setAddingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
+  const [navOpen, setNavOpen] = useState(false);
 
+  const media = useMedia();
+  const { isMobile } = media;
   const { route, navigate } = useRoute();
   const { quoteText, shuffle, addQuote } = useQuotes();
   const market = useMarket();
@@ -168,6 +172,18 @@ export default function App() {
     const [id, mode] = part.split(':');
     if (id && (mode === 'area' || mode === 'bar')) cardMode[id] = mode;
   }
+
+  // The nav drawer only exists on phones, and the page behind it should not
+  // scroll while it is covering the content.
+  useEffect(() => {
+    if (!isMobile && navOpen) setNavOpen(false);
+  }, [isMobile, navOpen]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [navOpen]);
 
   // Unknown or bare hashes settle on a canonical URL without adding history.
   const canonicalUnknown = !route.segments.length || !SLUG_TO_TAB[route.segments[0]];
@@ -268,15 +284,19 @@ export default function App() {
         <div className="blob sky" /><div className="blob rose" /><div className="blob amber" />
       </div>
 
-      <div style={{ display: 'flex', position: 'relative', zIndex: 1, minHeight: '100vh' }}>
+      {/* align-items:flex-start matters — the default `stretch` would size the
+          sidebar to the full content height, leaving position:sticky no room to
+          travel, so the rail would scroll off with the page. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', zIndex: 1, minHeight: '100vh' }}>
         <Sidebar
           items={navItems}
           active={tab}
           onNav={id => go(id as TabId)}
           collapsed={collapsed}
           onToggle={() => setCollapsed(c => !c)}
-          userName={market.user?.name ?? profile.name}
-          userSub={profile.style}
+          isMobile={isMobile}
+          open={navOpen}
+          onClose={() => setNavOpen(false)}
         />
 
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -286,11 +306,14 @@ export default function App() {
             sessionUser={market.user} asOf={market.asOf}
             onRefresh={() => market.refresh()}
             onLogout={() => { void logout().then(() => window.location.reload()); }}
+            isMobile={isMobile}
+            isTight={media.isTight}
+            onOpenNav={() => setNavOpen(true)}
           />
 
-          <div style={{ padding: '22px 24px 72px', maxWidth: 1200, width: '100%', margin: '0 auto' }}>
-            {/* Index strip */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+          <div style={{ padding: isMobile ? '16px 14px 64px' : '22px 24px 72px', maxWidth: 1200, width: '100%', margin: '0 auto', minWidth: 0 }}>
+            {/* Index strip — six across is unreadable on a phone; two is legible. */}
+            <div style={{ display: 'grid', gridTemplateColumns: cols(media, 6, 3, 2), gap: isMobile ? 10 : 12 }}>
               {indices.map(ix => (
                 <div key={ix.name} onClick={ix.open} title="Open chart" style={{ minWidth: 0, cursor: 'pointer', background: T.card, borderRadius: 14, padding: '12px 14px', boxShadow: T.shadow + ', inset 0 0 0 1px ' + T.borderSoft }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
@@ -305,12 +328,27 @@ export default function App() {
               ))}
             </div>
 
-            {/* Rule of the day */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 18, padding: '11px 16px', background: T.card, borderRadius: 12, boxShadow: T.shadow + ', inset 0 0 0 1px ' + T.borderSoft }}>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: T.amber }}>RULE</span>
-              <div style={{ fontSize: 13.5, color: T.text, fontStyle: 'italic', flex: 1, minWidth: 0 }}>&ldquo;{quoteText}&rdquo;</div>
-              <button onClick={shuffle} title="Next" style={{ ...ghostBtn, fontSize: 14, lineHeight: 1 }}>&#8635;</button>
-              <button onClick={() => setAddingQuote(v => !v)} style={{ ...ghostBtn, fontSize: 12.5, fontWeight: 600 }}>{addingQuote ? 'Cancel' : '+ Add rule'}</button>
+            {/* Rule of the day — the quote wraps under its label on a phone so
+                it never gets squeezed into a one-word-per-line column. */}
+            <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 8 : 12, marginTop: 18, padding: isMobile ? '12px 14px' : '11px 16px', background: T.card, borderRadius: 12, boxShadow: T.shadow + ', inset 0 0 0 1px ' + T.borderSoft }}>
+              {isMobile ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: T.amber }}>RULE</span>
+                    <div style={{ flex: 1 }} />
+                    <button onClick={shuffle} title="Next" aria-label="Next rule" style={{ ...ghostBtn, fontSize: 16, lineHeight: 1, minWidth: 34, minHeight: 34 }}>&#8635;</button>
+                    <button onClick={() => setAddingQuote(v => !v)} style={{ ...ghostBtn, fontSize: 12.5, fontWeight: 600, minHeight: 34, padding: '0 6px' }}>{addingQuote ? 'Cancel' : '+ Add'}</button>
+                  </div>
+                  <div style={{ fontSize: 13.5, color: T.text, fontStyle: 'italic', minWidth: 0, lineHeight: 1.5 }}>&ldquo;{quoteText}&rdquo;</div>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: T.amber }}>RULE</span>
+                  <div style={{ fontSize: 13.5, color: T.text, fontStyle: 'italic', flex: 1, minWidth: 0 }}>&ldquo;{quoteText}&rdquo;</div>
+                  <button onClick={shuffle} title="Next" style={{ ...ghostBtn, fontSize: 14, lineHeight: 1 }}>&#8635;</button>
+                  <button onClick={() => setAddingQuote(v => !v)} style={{ ...ghostBtn, fontSize: 12.5, fontWeight: 600 }}>{addingQuote ? 'Cancel' : '+ Add rule'}</button>
+                </>
+              )}
             </div>
             {addingQuote && (
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -329,9 +367,10 @@ export default function App() {
               <BreadthTab
                 D={D} cardMode={cardMode} setCard={setCard}
                 range={breadthRange} setRange={setBreadthRange}
+                media={media}
               />
             )}
-            {tab === 'chart' && <ChartsTab D={D} chartSym={chartSym} setChartSym={setChartSym} watch={watch} />}
+            {tab === 'chart' && <ChartsTab D={D} chartSym={chartSym} setChartSym={setChartSym} watch={watch} media={media} />}
             {tab === 'sectors' && <SectorsTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
             {tab === 'highs' && (
               <HighsTab
@@ -340,8 +379,8 @@ export default function App() {
                 watch={watch} toggle={toggle} onOpen={setDrawerSym}
               />
             )}
-            {tab === 'draw' && <DrawdownTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
-            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} />}
+            {tab === 'draw' && <DrawdownTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} media={media} />}
+            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} media={media} />}
             {tab === 'news' && <NewsTab D={D} route={route} navigate={navigate} watch={watch} />}
           </div>
         </main>

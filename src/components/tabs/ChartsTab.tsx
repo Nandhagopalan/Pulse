@@ -5,17 +5,19 @@ import type { MarketData } from '../../lib/data';
 import { areaLine, barsBottom } from '../../lib/svg';
 import { ohlc, candleChart, type Candle } from '../../lib/candles';
 import { fetchCandles, type ApiCandle } from '../../lib/api';
+import type { Media } from '../../lib/useMedia';
 
 function fmtAxisDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00Z');
   return d.getUTCDate().toString().padStart(2, '0') + ' ' + d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
 }
 
-export function ChartsTab({ D, chartSym, setChartSym, watch }: {
+export function ChartsTab({ D, chartSym, setChartSym, watch, media }: {
   D: MarketData;
   chartSym: string;
   setChartSym: (s: string) => void;
   watch: Record<string, true>;
+  media: Media;
 }) {
   const idxSyms = D.indices.map(ix => ({ key: ix.name, label: ix.name, sub: 'Index', last: ix.value, vol: ix.name === 'INDIA VIX' ? 4 : 0.95 }));
   const watchSyms = D.stocks.filter(s => watch[s.sym]).map(s => ({ key: s.sym, label: s.sym, sub: s.sector, last: s.price, vol: 2.2 }));
@@ -64,18 +66,20 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
 
   return (
     <div style={{ marginTop: 18 }}>
-      <Card style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <select value={sel.key} onChange={e => setChartSym(e.target.value)} style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, padding: '8px 12px', borderRadius: 10, border: '1px solid ' + T.border, background: T.cardAlt, color: T.ink }}>
+      <Card style={{ padding: media.isMobile ? '14px 14px' : '16px 20px', display: 'flex', alignItems: media.isMobile ? 'stretch' : 'center', justifyContent: 'space-between', gap: media.isMobile ? 12 : 20, flexWrap: 'wrap', flexDirection: media.isMobile ? 'column' : 'row' }}>
+        <div style={{ display: 'flex', alignItems: media.isMobile ? 'stretch' : 'center', gap: media.isMobile ? 10 : 16, flexDirection: media.isMobile ? 'column' : 'row', minWidth: 0 }}>
+          <select value={sel.key} onChange={e => setChartSym(e.target.value)} style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, padding: '8px 12px', borderRadius: 10, border: '1px solid ' + T.border, background: T.cardAlt, color: T.ink, maxWidth: '100%' }}>
             {allSyms.map(o => <option key={o.key} value={o.key}>{o.key}</option>)}
           </select>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <Mono size={21} weight={600}>{sel.last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Mono>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
+            <Mono size={media.isMobile ? 19 : 21} weight={600}>{sel.last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Mono>
             <Mono size={14} weight={600} color={dirColor(dayChg)}>{(dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%'}</Mono>
             <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, background: T.borderSoft, borderRadius: 99, padding: '3px 10px' }}>{sel.sub}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={media.isMobile
+          ? { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 6 }
+          : { display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {emaPills.map(e => (
             <div key={e.label} style={{ textAlign: 'center', background: e.bg, borderRadius: 10, padding: '6px 12px' }}>
               <Mono size={12.5} weight={600} color={e.color}>{e.val}</Mono>
@@ -95,9 +99,9 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
         </svg>
       </Card>
 
-      <Card style={{ marginTop: 14, padding: '18px 20px' }}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <svg viewBox="0 0 900 336" preserveAspectRatio="none" style={{ flex: 1, minWidth: 0, height: 340, display: 'block', overflow: 'visible' }}>
+      <Card style={{ marginTop: 14, padding: media.isMobile ? '14px 12px' : '18px 20px' }}>
+        <div style={{ display: 'flex', gap: media.isMobile ? 6 : 12 }}>
+          <svg viewBox="0 0 900 336" preserveAspectRatio="none" style={{ flex: 1, minWidth: 0, height: media.isMobile ? 240 : 340, display: 'block', overflow: 'visible' }}>
             <path d="M0 84 H900 M0 168 H900 M0 252 H900" stroke={T.borderSoft} strokeWidth={1} />
             <path d={chart.ema50} fill="none" stroke={T.navy} strokeWidth={1.5} strokeLinejoin="round" opacity={0.8} />
             <path d={chart.ema10} fill="none" stroke={T.amber} strokeWidth={1.5} strokeLinejoin="round" opacity={0.9} />
@@ -107,16 +111,18 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
             <path d={chart.db} fill={T.down} />
             <path d={'M0 ' + chart.lastY + ' H900'} stroke={T.faint} strokeWidth={1} strokeDasharray="4 3" opacity={0.8} />
           </svg>
-          <div style={{ width: 62, height: 336, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0' }}>
+          <div style={{ width: media.isMobile ? 44 : 62, flexShrink: 0, height: media.isMobile ? 240 : 336, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '4px 0' }}>
             {chart.priceTicks.map((p, i) => (
-              <div key={i} style={{ fontFamily: T.mono, fontSize: 10.5, color: T.faint, textAlign: 'right' }}>{p}</div>
+              <div key={i} style={{ fontFamily: T.mono, fontSize: media.isMobile ? 9 : 10.5, color: T.faint, textAlign: 'right' }}>{p}</div>
             ))}
           </div>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', paddingRight: 62, marginTop: 8 }}>
-          {chartDates.map(d => <span key={d} style={{ fontFamily: T.mono, fontSize: 10.5, color: T.faint }}>{d}</span>)}
+        <div style={{ display: 'flex', justifyContent: 'space-between', paddingRight: media.isMobile ? 44 : 62, marginTop: 8 }}>
+          {/* Six date ticks crowd into each other on a phone — show every other. */}
+          {(media.isMobile ? chartDates.filter((_, i) => i % 2 === 0) : chartDates)
+            .map(d => <span key={d} style={{ fontFamily: T.mono, fontSize: media.isMobile ? 9.5 : 10.5, color: T.faint }}>{d}</span>)}
         </div>
-        <div style={{ display: 'flex', gap: 18, marginTop: 12, paddingTop: 12, borderTop: '1px solid ' + T.borderSoft }}>
+        <div style={{ display: 'flex', gap: media.isMobile ? 10 : 18, flexWrap: 'wrap', marginTop: 12, paddingTop: 12, borderTop: '1px solid ' + T.borderSoft }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}><span style={{ width: 14, height: 2, background: T.amber, display: 'block' }} />10 EMA</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}><span style={{ width: 14, height: 2, background: T.navy, display: 'block' }} />50 EMA</span>
           <span style={{ fontSize: 12, color: T.faint }}>
@@ -125,7 +131,7 @@ export function ChartsTab({ D, chartSym, setChartSym, watch }: {
         </div>
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: media.isMobile ? '1fr' : '1fr 1fr', gap: 14, marginTop: 14 }}>
         {emaMinis.map(e => (
           <Card key={e.label} style={{ padding: '14px 18px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>

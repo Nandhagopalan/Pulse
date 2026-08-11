@@ -2,6 +2,14 @@ html, body {
   margin: 0;
   padding: 0;
   background: #f7f6f3;
+  /* Belt-and-braces against a stray wide child; wide content is expected to
+     scroll inside its own .table-scroll container instead.
+     `clip` rather than `hidden` on purpose: `hidden` turns these into scroll
+     containers, which makes every descendant position:sticky (the sidebar rail
+     and the top bar) stick to the document instead of the viewport, so they
+     scroll off the screen. `clip` contains overflow without that side effect. */
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 body {
@@ -50,13 +58,15 @@ a:hover {
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { scrollbar-width: none; }
 
-/* ambient blurred gradient blobs */
+/* ambient blurred gradient blobs — purely decorative, and clipped to the
+   viewport so their fixed pixel sizes can never widen the page. */
 .ambient {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  contain: strict;
 }
 .ambient .blob {
   position: absolute;
@@ -75,6 +85,50 @@ a:hover {
 .ambient .blob.amber {
   width: 560px; height: 560px; top: -160px; right: -160px;
   background: radial-gradient(circle at 50% 50%, rgba(253,224,71,0.35), rgba(253,224,71,0) 70%);
+}
+
+/* Wide, column-aligned content (the data tables) keeps its grid and scrolls
+   horizontally inside the card rather than squeezing columns to nothing. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Off-canvas sidebar, phones only. Transform rather than display so it slides. */
+.sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(35, 43, 56, 0.34);
+  z-index: 39;
+  animation: fade-in 140ms ease;
+}
+
+@media (max-width: 768px) {
+  .sidebar-drawer {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    /* Beats the scrim (39). !important because the aside carries an inline
+       z-index for the desktop sticky rail. */
+    z-index: 40 !important;
+    transform: translateX(-100%);
+    transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+    box-shadow: 12px 0 40px rgba(15, 23, 42, 0.12);
+  }
+  .sidebar-drawer.open {
+    transform: translateX(0);
+  }
+  /* Ambient blobs are decorative and their fixed sizes overflow a phone. */
+  .ambient { display: none; }
+}
+
+/* Comfortable tap targets on touch devices without disturbing mouse layouts. */
+@media (hover: none) and (pointer: coarse) {
+  button, select, a[role="button"] {
+    touch-action: manipulation;
+  }
 }
 
 @keyframes drawer-in {

@@ -4,6 +4,7 @@ import { Card, Label, Mono, Serif } from '../ui';
 import type { MarketData } from '../../lib/data';
 import { areaLine, arc, barsBottom, barsTop, barsSigned } from '../../lib/svg';
 import { fmtDay, fmtDayYear, tail, windowNote, rangeLabel } from '../../lib/window';
+import type { Media } from '../../lib/useMedia';
 
 type CardMode = 'area' | 'bar';
 
@@ -124,13 +125,15 @@ interface MetricSpec {
   desc: string;
 }
 
-export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
+export function BreadthTab({ D, cardMode, setCard, range, setRange, media }: {
   D: MarketData;
   cardMode: Record<string, CardMode>;
   setCard: (id: string, m: CardMode) => void;
   range: BreadthRange;
   setRange: (r: BreadthRange) => void;
+  media: Media;
 }) {
+  const { isMobile } = media;
   const dates = D.dates || [];
   const asOf = dates.length ? fmtDayYear(dates[dates.length - 1]) : null;
   const sessions = RANGES.find(r => r.id === range)?.sessions ?? 21;
@@ -225,15 +228,15 @@ export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
         )}
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.05fr 1.45fr', gap: 16, marginTop: 16 }}>
-        <Card style={{ padding: '22px 24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.05fr 1.45fr', gap: 16, marginTop: 16 }}>
+        <Card style={{ padding: isMobile ? '18px 16px' : '22px 24px', minWidth: 0 }}>
           <Label>Market Pulse</Label>
           <Serif size={25} style={{ marginTop: 4 }}>Breadth Thrust</Serif>
           <div style={{ fontSize: 11.5, color: T.faint, marginTop: 4 }}>
             Single session snapshot{asOf ? ' · ' + asOf : ''} — not an average
           </div>
-          <div style={{ position: 'relative', width: 220, margin: '10px auto 6px' }}>
-            <svg viewBox="0 0 220 200" style={{ width: 220, height: 200, display: 'block' }}>
+          <div style={{ position: 'relative', width: 220, maxWidth: '100%', margin: '10px auto 6px' }}>
+            <svg viewBox="0 0 220 200" style={{ width: '100%', height: 200, display: 'block' }}>
               <path d={gaugeTrack} fill="none" stroke={T.borderSoft} strokeWidth={16} strokeLinecap="round" />
               <path d={gaugeValue} fill="none" stroke={gaugeColor} strokeWidth={16} strokeLinecap="round" />
             </svg>
@@ -245,10 +248,10 @@ export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
               <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.12em', color: T.faint, marginTop: 8 }}>OF UNIVERSE ADVANCING</div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 10, marginTop: 4 }}>
-            <span style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 600, color: T.up }}>{D.advances.toLocaleString('en-IN')}</span>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: T.faint }}>ADVANCES · DECLINES</span>
-            <span style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 600, color: T.down }}>{D.declines.toLocaleString('en-IN')}</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: isMobile ? 8 : 10, marginTop: 4, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: T.serif, fontSize: isMobile ? 24 : 28, fontWeight: 600, color: T.up }}>{D.advances.toLocaleString('en-IN')}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: T.faint, textAlign: 'center' }}>ADVANCES · DECLINES</span>
+            <span style={{ fontFamily: T.serif, fontSize: isMobile ? 24 : 28, fontWeight: 600, color: T.down }}>{D.declines.toLocaleString('en-IN')}</span>
           </div>
           <div style={{ display: 'flex', gap: 3, height: 8, marginTop: 12 }}>
             <div style={{ width: advWidth, background: T.up, borderRadius: 99, opacity: 0.85 }} />
@@ -287,7 +290,7 @@ export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginTop: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : media.isTablet ? 'repeat(2, minmax(0,1fr))' : 'repeat(3, minmax(0,1fr))', gap: 16, marginTop: 16 }}>
         <SignedChart
           title="Daily Advances − Declines"
           badge={'latest ' + (ad.vals[ad.n - 1] >= 0 ? '+' : '') + ad.vals[ad.n - 1]}
@@ -307,12 +310,12 @@ export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
         />
       </div>
 
-      <Card style={{ marginTop: 16, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16 }}>
+      <Card style={{ marginTop: 16, padding: isMobile ? '14px 16px' : '16px 20px', display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 10 : 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', color: regimeColor, background: regimeBg, borderRadius: 99, padding: '5px 12px' }}>{regimeTag}</span>
           <Mono size={15} weight={600}>{riskScore}<span style={{ color: T.faint, fontSize: 12 }}>/100</span></Mono>
         </div>
-        <div style={{ fontSize: 13.5, color: T.text, flex: 1 }}>{regimeStats} — <span style={{ fontWeight: 700, color: regimeColor }}>{regimeVerdict}</span></div>
+        <div style={{ fontSize: 13.5, color: T.text, flex: 1, minWidth: 0, lineHeight: 1.5 }}>{regimeStats} — <span style={{ fontWeight: 700, color: regimeColor }}>{regimeVerdict}</span></div>
       </Card>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 26, flexWrap: 'wrap' }}>
@@ -340,7 +343,7 @@ export function BreadthTab({ D, cardMode, setCard, range, setRange }: {
           const fill = spec.color === T.navy ? T.navySoft : spec.color === T.up ? T.upSoft : T.downSoft;
           const avg = spec.series.reduce((a, b) => a + b, 0) / Math.max(1, n);
           return (
-            <Card key={spec.id} style={{ gridColumn: 'span ' + spec.span, padding: '16px 18px 12px' }}>
+            <Card key={spec.id} style={{ gridColumn: 'span ' + (isMobile ? 12 : spec.span), padding: isMobile ? '14px 14px 10px' : '16px 18px 12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{spec.label}</div>

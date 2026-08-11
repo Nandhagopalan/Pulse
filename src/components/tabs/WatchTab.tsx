@@ -4,13 +4,15 @@ import { StockTable } from '../StockTable';
 import type { MarketData } from '../../lib/data';
 import type { Profile } from '../../lib/profile';
 import { fmtInr } from '../../lib/profile';
+import { cols, type Media } from '../../lib/useMedia';
 
-export function WatchTab({ D, watch, toggle, onOpen, profile }: {
+export function WatchTab({ D, watch, toggle, onOpen, profile, media }: {
   D: MarketData;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
   profile: Profile;
+  media: Media;
 }) {
   const rows = D.stocks.filter(s => watch[s.sym]);
 
@@ -32,7 +34,7 @@ export function WatchTab({ D, watch, toggle, onOpen, profile }: {
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: cols(media, 4, 2, 2), gap: media.isMobile ? 10 : 14, marginBottom: 16 }}>
         {[
           { label: 'Tracked', value: String(rows.length), color: T.ink, sub: slots >= 0 ? slots + ' slots free of ' + profile.maxPos : Math.abs(slots) + ' over your ' + profile.maxPos + ' max' },
           { label: 'Avg 1W move', value: (avg1w >= 0 ? '+' : '') + avg1w.toFixed(1) + '%', color: dirColor(avg1w), sub: 'across watchlist' },
