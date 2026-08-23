@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.ts",
-    "start": "node src/index.ts"
+    "start": "node src/index.ts",
+    "dev:local": "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres node --watch src/index.ts",
+    "start:local": "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres node src/index.ts"
   },
   "dependencies": {
     "pg": "^8.22.0"

@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
 import { T, dirColor } from '../../theme';
 import { Card, Label, Mono } from '../ui';
 import type { MarketData } from '../../lib/data';
 import { areaLine, barsBottom } from '../../lib/svg';
-import { ohlc, candleChart, type Candle } from '../../lib/candles';
-import { fetchCandles, type ApiCandle } from '../../lib/api';
+import { candleChart } from '../../lib/candles';
+import { useCandles } from '../../lib/useCandles';
 import type { Media } from '../../lib/useMedia';
 
 function fmtAxisDate(iso: string): string {
@@ -35,23 +34,9 @@ export function ChartsTab({ D, chartSym, watch, media, onPickSymbol }: {
     ? { key: routed.sym, label: routed.sym, sub: routed.sector, last: routed.price, vol: 2.2 }
     : allSyms.find(x => x.key === chartSym) || allSyms[0];
 
-  const [real, setReal] = useState<{ sym: string; candles: ApiCandle[] } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    fetchCandles(sel.key, 90)
-      .then(r => { if (!cancelled && r.candles.length >= 20) setReal(r); })
-      .catch(() => { /* fall back to synthetic candles */ });
-    return () => { cancelled = true; };
-  }, [sel.key]);
-
-  const realCandles = real?.sym === sel.key ? real.candles : null;
-  const baseCandles: Candle[] = realCandles
-    ? realCandles.map(c => ({ o: c.o, c: c.c, h: c.h, l: c.l }))
-    : ohlc(sel.key, sel.last, sel.vol, 90);
-
   // Every series ends on the last completed session — Pulse has no intraday
   // feed, so there is no forming candle to append.
-  const candles: Candle[] = baseCandles;
+  const { candles, dates, real } = useCandles(sel.key, 90, sel.last, sel.vol);
 
   const chart = candleChart(candles, 900, 336, 8);
   const prevC = candles[candles.length - 2].c;
@@ -64,8 +49,8 @@ export function ChartsTab({ D, chartSym, watch, media, onPickSymbol }: {
     return { label: label as string, val: val as string, color: above ? T.up : T.down, bg: above ? T.upSoft : T.downSoft };
   });
   const nnhStrip = barsBottom(D.series.newHighs, 900, 40, 4);
-  const chartDates = realCandles
-    ? [0, 1, 2, 3, 4, 5].map(i => fmtAxisDate(realCandles[Math.min(realCandles.length - 1, Math.round(i * (realCandles.length - 1) / 5))].d))
+  const chartDates = dates
+    ? [0, 1, 2, 3, 4, 5].map(i => fmtAxisDate(dates[Math.min(dates.length - 1, Math.round(i * (dates.length - 1) / 5))]))
     : ['24 Apr', '12 May', '30 May', '18 Jun', '07 Jul', '23 Jul'];
   const emaMinis = [
     ['20 EMA', D.emaVals.e20, D.emaHist.e20],
@@ -146,7 +131,7 @@ export function ChartsTab({ D, chartSym, watch, media, onPickSymbol }: {
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}><span style={{ width: 14, height: 2, background: T.amber, display: 'block' }} />10 EMA</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}><span style={{ width: 14, height: 2, background: T.navy, display: 'block' }} />50 EMA</span>
           <span style={{ fontSize: 12, color: T.faint }}>
-            {baseCandles.length} sessions · daily candles · {realCandles ? 'NSE EOD (adjusted)' : 'sample data'}
+            {candles.length} sessions · daily candles · {real ? 'NSE EOD (adjusted)' : 'sample data'}
           </span>
         </div>
       </Card>

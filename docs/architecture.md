@@ -151,7 +151,7 @@ open, and the deep history there is for batch analytics, not the request path.
 | `users` | `id PK (provider:sub), provider, name, email, avatar` | Keyed on the Google subject id, which is stable — emails get reassigned |
 | `sessions` | `sid PK, user_id, created_at, expires_at` | 30-day TTL; identity only, no third-party token |
 | `user_watchlist` | `(user_id, symbol) PK, added_at` | Capped at 200 symbols |
-| `user_prefs` | `user_id PK, data, updated_at` | JSON: `capital`, `riskPct`, `maxPos` — clamped server-side |
+| `user_prefs` | `user_id PK, data, updated_at` | Unused. Held `capital`, `riskPct`, `maxPos` until the strategy book took over sizing; no reader or writer remains |
 | `news_articles` | `(id, symbol) PK, …` | Marketaux cache; one article can tag several symbols |
 
 Indexes exist on `stock_metrics(date)`, `sector_scores(date)`,
@@ -184,7 +184,6 @@ src/config.ts   env, with .env/.env.local fallback for local development
 | `GET /api/market/summary` | The whole dashboard payload for the latest session |
 | `GET /api/stocks/:sym/candles?n=` | Adjusted candles, ≤ 500; indices resolve from `index_bars` |
 | `GET/POST/DELETE /api/watchlist[/:sym]` · `POST /api/watchlist/import` | Per-user watchlist |
-| `GET/POST /api/prefs` | Per-user preferences |
 | `GET /api/news` | Watchlist news, symbols read server-side |
 | `GET /api/status` | Coverage, last session, recent ingest log |
 | `GET /health` | Unauthenticated liveness |

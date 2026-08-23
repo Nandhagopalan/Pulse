@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { T } from '../theme';
-import { Label, Mono, inputStyle } from './ui';
-import type { Prefs, Profile } from '../lib/profile';
-import { fmtInr } from '../lib/profile';
+import { Mono } from './ui';
+import type { Profile } from '../lib/profile';
 import { marketStatus } from '../lib/market';
 import type { SessionUser } from '../lib/api';
 
@@ -11,36 +10,9 @@ import type { SessionUser } from '../lib/api';
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
 const SEARCH_HINT = IS_MAC ? '⌘K' : 'Ctrl K';
 
-function ProfileField({ label, value, onCommit, prefix }: {
-  label: string; value: number; onCommit: (n: number) => void; prefix?: string;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  const commit = () => {
-    const n = parseFloat(draft);
-    if (Number.isFinite(n) && n > 0) onCommit(n); else setDraft(String(value));
-  };
-  return (
-    <div>
-      <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginBottom: 4 }}>{label}</div>
-      <div style={{ position: 'relative' }}>
-        {prefix && <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: T.faint }}>{prefix}</span>}
-        <input
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          style={{ ...inputStyle, fontFamily: T.mono, fontSize: 13, paddingLeft: prefix ? 26 : 12 }}
-        />
-      </div>
-    </div>
-  );
-}
-
-export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout, isMobile, isTight, onOpenNav, onOpenSearch }: {
+export function TopBar({ title, profile, watchCount, sessionUser, asOf, onRefresh, onLogout, isMobile, isTight, onOpenNav, onOpenSearch }: {
   title: string;
   profile: Profile;
-  updateProfile: (p: Partial<Prefs>) => void;
   watchCount: number;
   sessionUser?: SessionUser | null;
   asOf?: string | null;
@@ -75,7 +47,6 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
     timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).replace(',', '') + ' IST';
-  const riskPerTrade = profile.capital * profile.riskPct / 100;
 
   const pill = (bg: string, dot: string, textColor: string, label: string, title?: string) => (
     <div title={title} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 30, padding: '0 12px', borderRadius: 99, background: bg, boxShadow: bg === T.card ? 'inset 0 0 0 1px ' + T.border : 'none' }}>
@@ -189,28 +160,16 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
 
             <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
 
-            <Label>Risk settings</Label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-              <ProfileField label="Capital" value={profile.capital} onCommit={n => updateProfile({ capital: n })} prefix="₹" />
-              <ProfileField label="Risk / trade %" value={profile.riskPct} onCommit={n => updateProfile({ riskPct: n })} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-              <ProfileField label="Max positions" value={profile.maxPos} onCommit={n => updateProfile({ maxPos: Math.round(n) })} />
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Risk per trade</div>
-                <div style={{ padding: '8px 12px', border: '1px solid ' + T.borderSoft, borderRadius: 8, background: T.cardAlt }}>
-                  <Mono size={13} color={T.amber} weight={600}>{fmtInr(riskPerTrade)}</Mono>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ height: 1, background: T.borderSoft, margin: '16px 0' }} />
+            {/* This menu used to carry capital, risk per trade and max
+                positions. All three are the strategy book's business now: it
+                versions its own config and owns its capital, and a second copy
+                here could only ever disagree with it. */}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: T.muted }}>
               <span>Watchlist</span>
               <Mono size={12}>{watchCount} stocks</Mono>
             </div>
             <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
-              Position sizes across the terminal are computed from these settings.
+              Capital and position sizing live on the Strategy tab.
             </div>
           </div>
         )}

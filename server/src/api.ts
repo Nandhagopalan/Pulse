@@ -1,5 +1,5 @@
 /** Terminal-facing API. All routes require an authenticated session. */
-import { getDb, metaGet } from './db.ts';
+import { getDb, metaGet, type Db } from './db.ts';
 import { requireAuth } from './auth.ts';
 import { json, readJson, type Router } from './router.ts';
 import { isMarketOpen } from './util.ts';
@@ -222,37 +222,6 @@ export function registerApiRoutes(router: Router): void {
     json(ctx, 200, { symbols: await watchlistFor(userId) });
   }));
 
-  router.get('/api/prefs', requireAuth(async ctx => {
-    const db = await getDb();
-    const rows = await db.all<{ data: string }>(
-      'SELECT data FROM user_prefs WHERE user_id = ?', [ctx.session!.userId],
-    );
-    let prefs: unknown = null;
-    if (rows[0]) { try { prefs = JSON.parse(rows[0].data); } catch { prefs = null; } }
-    json(ctx, 200, { prefs });
-  }));
-
-  router.post('/api/prefs', requireAuth(async ctx => {
-    const body = await readJson<Record<string, unknown>>(ctx);
-    if (!body || typeof body !== 'object') return json(ctx, 400, { error: 'bad_body' });
-    // Only the known numeric fields are stored — this blob is echoed back to the
-    // client, so it must never become a place to park arbitrary content.
-    const num = (v: unknown, lo: number, hi: number, dflt: number) =>
-      typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
-    const prefs = {
-      capital: num(body.capital, 0, 1e12, 1000000),
-      riskPct: num(body.riskPct, 0, 100, 1),
-      maxPos: Math.round(num(body.maxPos, 1, 100, 6)),
-    };
-    const db = await getDb();
-    await db.run(
-      `INSERT INTO user_prefs (user_id, data, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-      [ctx.session!.userId, JSON.stringify(prefs), new Date().toISOString()],
-    );
-    json(ctx, 200, { prefs });
-  }));
-
   router.get('/api/news', requireAuth(async ctx => {
     if (!newsEnabled()) return json(ctx, 200, { enabled: false, articles: [] });
 
@@ -268,6 +237,306 @@ export function registerApiRoutes(router: Router): void {
     await refreshIfStale(symbols);
     const articles = await getCachedNews(symbols);
     json(ctx, 200, { enabled: true, articles });
+  }));
+
+  /*
+   * The strategy engine's paper book. Read-only: the book is advanced by the
+   * nightly pipeline, never by a request, which is what keeps the record a test
+   * of the rules rather than of whoever had the tab open.
+   */
+  router.get('/api/strategy/summary', requireAuth(async ctx => {
+    const db = await getDb();
+    const bookId = ctx.url.searchParams.get('book') ?? 'balanced';
+
+    /*
+     * The strategy tables arrive with their own migration, and the frontend can
+     * deploy before Supabase has applied it. Missing tables are therefore an
+     * expected transient state, not a fault: answer with something the tab can
+     * render rather than a 500 and a stack trace in the log.
+     */
+    if (!(await hasStrategyTables(db))) {
+      return json(ctx, 503, {
+        error: 'not_deployed',
+        message: STRATEGY_NOT_DEPLOYED,
+      });
+    }
+
+    const book = (await db.all<{
+      id: string; fill_mode: string; config: string; config_version: number; capital: number;
+      started_on: string | null;
+    }>(
+      'SELECT id, fill_mode, config, config_version, capital, started_on FROM strategy_books WHERE id = ?',
+      [bookId],
+    ))[0];
+    if (!book) {
+      return json(ctx, 404, {
+        error: 'no_book',
+        message: `No book named "${bookId}". Run \`python -m pipeline strategy\` to create it.`,
+      });
+    }
+
+    const latest = (await db.all<Record<string, unknown>>(
+      'SELECT * FROM strategy_state WHERE book_id = ? ORDER BY date DESC LIMIT 1', [bookId]))[0];
+
+    const [equity, positions, signals, closed, books] = await Promise.all([
+      db.all<{ date: string; equity: number; deployed: number; regime_on: boolean; twr_factor: number }>(
+        `SELECT date, equity, deployed, regime_on, twr_factor FROM strategy_state
+          WHERE book_id = ? ORDER BY date`, [bookId]),
+      db.all(
+        `SELECT id, symbol, sector, entry_date, entry_px, qty, init_stop, stop, r_per_share,
+                last_px, bars, pending_exit, config_version, origin
+           FROM strategy_positions
+          WHERE book_id = ? AND status = 'open'
+          ORDER BY entry_date, symbol`, [bookId]),
+      // Only the newest session's signals: older pending rows were never taken.
+      db.all(
+        `SELECT symbol, rank, ref_close, stop, stop_pct, atr, rs_pct, sector, turnover_20d,
+                qty, position_value, risk_amount, status, skip_reason
+           FROM strategy_signals
+          WHERE book_id = ? AND date = (SELECT MAX(date) FROM strategy_signals WHERE book_id = ?)
+          ORDER BY rank`, [bookId, bookId]),
+      db.all(
+        `SELECT symbol, sector, entry_date, entry_px, exit_date, exit_px, qty, bars,
+                exit_reason, pnl, r_multiple, origin
+           FROM strategy_positions
+          WHERE book_id = ? AND status = 'closed'
+          ORDER BY exit_date DESC LIMIT 100`, [bookId]),
+      db.all<{ id: string }>('SELECT id FROM strategy_books WHERE enabled ORDER BY id'),
+    ]);
+
+    /*
+     * Equity is recomputed from cash plus the open positions rather than served
+     * from the stored row. On the manual book a position can be added or closed
+     * between nightly runs, which moves cash immediately; the stored equity
+     * would stay stale until the next run and the tab would not add up.
+     */
+    const marked = positions.reduce(
+      (sum, p) => sum + Number(p.qty) * Number(p.last_px ?? p.entry_px), 0);
+    const liveState = latest
+      ? { ...latest, equity: Number(latest.cash) + marked,
+          deployed: Number(latest.cash) + marked > 0
+            ? marked / (Number(latest.cash) + marked) : 0 }
+      : null;
+
+    json(ctx, 200, {
+      book: {
+        id: book.id,
+        fillMode: book.fill_mode,
+        configVersion: book.config_version,
+        capital: book.capital,
+        startedOn: book.started_on,
+        config: safeParse(book.config),
+      },
+      books: books.map(b => b.id),
+      state: liveState,
+      // Chain-linked from the daily factors, so a deposit into the book never
+      // reads as performance. Straight equity growth would.
+      performance: summarisePaper(equity, Number(book.capital)),
+      equity,
+      positions,
+      signals,
+      closed,
+    });
+  }));
+
+  /*
+   * Manual book writes.
+   *
+   * Guarded on fill_mode: the rules book is filled and closed by the pipeline
+   * alone, and letting a request touch it would turn its record into a mixture
+   * of the strategy and the operator's judgement with no way to separate them
+   * afterwards. That book is the experiment; this one is the operator's.
+   */
+  router.post('/api/strategy/positions', requireAuth(async ctx => {
+    const body = await readJson<Record<string, unknown>>(ctx);
+    if (!body) return json(ctx, 400, { error: 'bad_json' });
+    const db = await getDb();
+    if (!(await hasStrategyTables(db))) {
+      return json(ctx, 503, { error: 'not_deployed', message: STRATEGY_NOT_DEPLOYED });
+    }
+
+    const bookId = String(body.book ?? 'manual');
+    const guard = await requireManualBook(db, bookId);
+    if (guard) return json(ctx, guard.status, guard.body);
+
+    const symbol = String(body.symbol ?? '').trim().toUpperCase();
+    const entryPx = Number(body.entry_px);
+    const stop = Number(body.stop);
+    const qty = Math.floor(Number(body.qty));
+    const entryDate = String(body.entry_date ?? '').slice(0, 10);
+
+    if (!symbol) return json(ctx, 400, { error: 'bad_symbol', message: 'Symbol is required.' });
+    if (!Number.isFinite(entryPx) || entryPx <= 0) {
+      return json(ctx, 400, { error: 'bad_entry', message: 'Entry price must be above zero.' });
+    }
+    if (!Number.isFinite(stop) || stop <= 0 || stop >= entryPx) {
+      return json(ctx, 400, {
+        error: 'bad_stop',
+        message: 'Stop must be above zero and below the entry price.',
+      });
+    }
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return json(ctx, 400, { error: 'bad_qty', message: 'Quantity must be a whole number above zero.' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) {
+      return json(ctx, 400, { error: 'bad_date', message: 'Entry date must be YYYY-MM-DD.' });
+    }
+
+    const dup = await db.all(
+      `SELECT id FROM strategy_positions WHERE book_id = ? AND symbol = ? AND status = 'open'`,
+      [bookId, symbol],
+    );
+    if (dup.length) {
+      return json(ctx, 409, {
+        error: 'already_open',
+        message: `${symbol} is already open in this book. Close it before adding another.`,
+      });
+    }
+
+    const version = (await db.all<{ config_version: number }>(
+      'SELECT config_version FROM strategy_books WHERE id = ?', [bookId]))[0]?.config_version ?? 1;
+
+    /*
+     * Buying costs money. The nightly job reads cash off the newest
+     * strategy_state row, so a position added between runs has to debit that
+     * row — otherwise the book counts the shares *and* the cash that bought
+     * them, and equity is overstated by the whole position.
+     */
+    const outlay = entryPx * qty * (1 + BUY_CHARGES);
+    const latest = (await db.all<{ date: string; cash: number }>(
+      'SELECT date, cash FROM strategy_state WHERE book_id = ? ORDER BY date DESC LIMIT 1',
+      [bookId]))[0];
+    if (!latest) {
+      return json(ctx, 409, {
+        error: 'no_session',
+        message: 'This book has no session yet — run the pipeline once before adding positions.',
+      });
+    }
+    if (Number(latest.cash) < outlay) {
+      return json(ctx, 409, {
+        error: 'insufficient_cash',
+        message: `Not enough cash: the position costs ₹${Math.round(outlay).toLocaleString('en-IN')} `
+          + `and the book holds ₹${Math.round(Number(latest.cash)).toLocaleString('en-IN')}.`,
+      });
+    }
+
+    /*
+     * One statement, so the position and the cash debit cannot come apart. The
+     * pool hands out a connection per call, so two `run`s are two transactions:
+     * the first attempt at this left a position with its cash never deducted
+     * when the second failed. `deployed` is recomputed by the next nightly run,
+     * and is NOT NULL, so it is left alone here.
+     */
+    await db.run(
+      `WITH inserted AS (
+         INSERT INTO strategy_positions
+           (book_id, config_version, origin, symbol, sector, entry_date, entry_px, qty,
+            init_stop, stop, r_per_share, last_px, bars, stale, status)
+         VALUES (?,?,'manual',?,?,?,?,?,?,?,?,?,0,0,'open')
+         RETURNING book_id
+       )
+       UPDATE strategy_state SET cash = cash - ?
+        WHERE book_id = (SELECT book_id FROM inserted) AND date = ?`,
+      [bookId, version, symbol, body.sector ?? null, entryDate, entryPx, qty,
+       stop, stop, entryPx - stop, entryPx, outlay, latest.date],
+    );
+    json(ctx, 201, { ok: true });
+  }));
+
+  router.post('/api/strategy/positions/:id/close', requireAuth(async ctx => {
+    const body = await readJson<Record<string, unknown>>(ctx);
+    if (!body) return json(ctx, 400, { error: 'bad_json' });
+    const db = await getDb();
+    if (!(await hasStrategyTables(db))) {
+      return json(ctx, 503, { error: 'not_deployed', message: STRATEGY_NOT_DEPLOYED });
+    }
+
+    const id = Number(ctx.params.id);
+    const pos = (await db.all<{
+      book_id: string; entry_px: number; qty: number; r_per_share: number; bars: number;
+    }>(`SELECT book_id, entry_px, qty, r_per_share, bars FROM strategy_positions
+         WHERE id = ? AND status = 'open'`, [id]))[0];
+    if (!pos) return json(ctx, 404, { error: 'no_position', message: 'No open position with that id.' });
+
+    const guard = await requireManualBook(db, pos.book_id);
+    if (guard) return json(ctx, guard.status, guard.body);
+
+    const exitPx = Number(body.exit_px);
+    const exitDate = String(body.exit_date ?? '').slice(0, 10);
+    if (!Number.isFinite(exitPx) || exitPx <= 0) {
+      return json(ctx, 400, { error: 'bad_exit', message: 'Exit price must be above zero.' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(exitDate)) {
+      return json(ctx, 400, { error: 'bad_date', message: 'Exit date must be YYYY-MM-DD.' });
+    }
+
+    /*
+     * Costs match the backtest's model, so a manual trade's P&L is comparable
+     * with the rules book's rather than flattered by ignoring charges.
+     */
+    const cost = pos.entry_px * (1 + BUY_CHARGES) * pos.qty;
+    const proceeds = exitPx * (1 - SELL_CHARGES) * pos.qty;
+    const pnl = proceeds - cost;
+    const risk = pos.r_per_share * pos.qty;
+
+    // Closing and the cash credit go together, for the same reason as opening.
+    await db.run(
+      `WITH closed AS (
+         UPDATE strategy_positions
+            SET status='closed', exit_date=?, exit_px=?, exit_reason=?, pnl=?, r_multiple=?,
+                pending_exit=NULL
+          WHERE id = ?
+          RETURNING book_id
+       )
+       UPDATE strategy_state SET cash = cash + ?
+        WHERE book_id = (SELECT book_id FROM closed)
+          AND date = (SELECT MAX(date) FROM strategy_state WHERE book_id = (SELECT book_id FROM closed))`,
+      [exitDate, exitPx, String(body.reason ?? 'manual').slice(0, 32), pnl,
+       risk > 0 ? pnl / risk : 0, id, proceeds],
+    );
+    json(ctx, 200, { ok: true, pnl });
+  }));
+
+  /*
+   * Reset every book to a new opening capital.
+   *
+   * Destructive on purpose. A track record is a record *of a starting capital*:
+   * position sizes, drawdowns and returns were all computed against it, so
+   * changing it retroactively would leave a history that never happened. The
+   * only honest options are to keep the capital or to start over, and this is
+   * start over.
+   */
+  router.post('/api/strategy/reset', requireAuth(async ctx => {
+    const body = await readJson<Record<string, unknown>>(ctx);
+    if (!body) return json(ctx, 400, { error: 'bad_json' });
+    const db = await getDb();
+    if (!(await hasStrategyTables(db))) {
+      return json(ctx, 503, { error: 'not_deployed', message: STRATEGY_NOT_DEPLOYED });
+    }
+
+    const capital = Number(body.capital);
+    if (!Number.isFinite(capital) || capital < 10_000 || capital > 1e10) {
+      return json(ctx, 400, {
+        error: 'bad_capital',
+        message: 'Capital must be between ₹10,000 and ₹1,000 crore.',
+      });
+    }
+    if (body.confirm !== true) {
+      return json(ctx, 400, {
+        error: 'not_confirmed',
+        message: 'Resetting clears every position and all history. Send confirm: true to proceed.',
+      });
+    }
+
+    // Wipe first, then re-base. The next pipeline run rebuilds from the new
+    // capital because load_state falls back to it when no session row exists.
+    await db.run('DELETE FROM strategy_positions');
+    await db.run('DELETE FROM strategy_signals');
+    await db.run('DELETE FROM strategy_state');
+    await db.run('DELETE FROM strategy_cashflows');
+    await db.run('UPDATE strategy_books SET capital = ?, started_on = NULL, updated_at = ?',
+                 [capital, new Date().toISOString().slice(0, 10)]);
+    json(ctx, 200, { ok: true, capital });
   }));
 
   router.get('/api/status', requireAuth(async ctx => {
@@ -287,4 +556,95 @@ export function registerApiRoutes(router: Router): void {
       recentLog: log,
     });
   }));
+}
+
+function safeParse(blob: string): unknown {
+  try { return JSON.parse(blob); } catch { return null; }
+}
+
+/*
+ * Headline numbers for the paper book.
+ *
+ * Returns are chain-linked from the per-session factors the pipeline stores
+ * (`twr_factor`), not read off the equity curve. The two agree only while no
+ * money moves in or out; the moment capital is added, an equity-derived CAGR
+ * counts the deposit as a gain.
+ */
+function summarisePaper(
+  rows: { date: string; equity: number; twr_factor: number }[],
+  capital: number,
+): Record<string, number | null> {
+  if (!rows.length) return { days: 0, totalReturn: null, cagr: null, maxDrawdown: null };
+
+  let growth = 1;
+  for (const r of rows) growth *= Number(r.twr_factor) || 1;
+
+  const first = new Date(rows[0].date).getTime();
+  const last = new Date(rows[rows.length - 1].date).getTime();
+  const years = (last - first) / (365.25 * 24 * 3600 * 1000);
+
+  let peak = -Infinity;
+  let maxDd = 0;
+  for (const r of rows) {
+    peak = Math.max(peak, Number(r.equity));
+    maxDd = Math.min(maxDd, Number(r.equity) / peak - 1);
+  }
+
+  return {
+    days: rows.length,
+    equity: Number(rows[rows.length - 1].equity),
+    capital,
+    totalReturn: growth - 1,
+    // A few weeks of data annualises to nonsense, so it is withheld rather than
+    // shown as a headline number nobody should act on.
+    cagr: years >= 0.5 ? growth ** (1 / years) - 1 : null,
+    maxDrawdown: maxDd,
+  };
+}
+
+/*
+ * Cheap existence probe, cached after the first success.
+ *
+ * Catching 42P01 (undefined_table) around each query instead would mean five
+ * separate failure paths and a half-populated response; one check up front
+ * keeps the route's happy path clean.
+ */
+let strategyTablesReady = false;
+async function hasStrategyTables(db: Db): Promise<boolean> {
+  if (strategyTablesReady) return true;
+  const rows = await db.all<{ n: string | number }>(
+    `SELECT COUNT(*) AS n FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'strategy_books'`,
+  );
+  strategyTablesReady = Number(rows[0]?.n ?? 0) > 0;
+  return strategyTablesReady;
+}
+
+const STRATEGY_NOT_DEPLOYED =
+  'The strategy engine is not set up on this database yet — its migration has not been applied.';
+
+// Same figures the backtest deducts, so manual and rules P&L stay comparable.
+const BUY_CHARGES = 0.00147;
+const SELL_CHARGES = 0.00137;
+
+/** Refuse writes to anything but a manual book. Returns null when allowed. */
+async function requireManualBook(
+  db: Db, bookId: string,
+): Promise<{ status: number; body: Record<string, string> } | null> {
+  const row = (await db.all<{ fill_mode: string }>(
+    'SELECT fill_mode FROM strategy_books WHERE id = ?', [bookId]))[0];
+  if (!row) {
+    return { status: 404, body: { error: 'no_book', message: `No book named "${bookId}".` } };
+  }
+  if (row.fill_mode !== 'manual') {
+    return {
+      status: 403,
+      body: {
+        error: 'read_only',
+        message: `"${bookId}" is filled by the pipeline and cannot be edited by hand. `
+          + 'Use the manual book, so the strategy\'s own record stays a clean test of the rules.',
+      },
+    };
+  }
+  return null;
 }

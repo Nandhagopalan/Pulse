@@ -15,7 +15,10 @@ export function mulberryRng(seed: number) {
 const candleCache = new Map<string, Candle[]>();
 
 export function ohlc(key: string, last: number, volPct: number, n: number): Candle[] {
-  const cached = candleCache.get(key);
+  // Length belongs in the key: the drawer asks for 60 sessions and the Charts
+  // tab for 90, and keying on the symbol alone served whichever ran first.
+  const cacheKey = key + ':' + n;
+  const cached = candleCache.get(cacheKey);
   if (cached) return cached;
   const rnd = mulberryRng(strHash(key));
   const g = () => (rnd() + rnd() + rnd() - 1.5) * 2;
@@ -33,7 +36,7 @@ export function ohlc(key: string, last: number, volPct: number, n: number): Cand
   }
   const ratio = last / candles[n - 1].c;
   candles.forEach(cd => { cd.o *= ratio; cd.c *= ratio; cd.h *= ratio; cd.l *= ratio; });
-  candleCache.set(key, candles);
+  candleCache.set(cacheKey, candles);
   return candles;
 }
 

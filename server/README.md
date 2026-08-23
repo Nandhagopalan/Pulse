@@ -88,3 +88,26 @@ one serves 503s from `/api/market/summary` until a session is published — run
   NSE's corporate actions feed and verified against the tape; prices are adjusted
   at compute time (adjusted = raw / k), so raw bars are never mutated. The server
   reads the already-adjusted `stock_candles` cache and does no adjustment itself.
+
+## Running against local Supabase
+
+`.env.local` at the repo root points `SUPABASE_DB_URL` at the hosted database, so
+a plain `npm start` talks to **production**. That is usually what you want, but
+it means anything not yet migrated there — the strategy engine, for instance —
+answers 503 with "its migration has not been applied".
+
+To run against the local Docker stack instead:
+
+```bash
+supabase start          # from the repo root, if it is not already up
+cd server && npm run dev:local
+```
+
+`dev:local` and `start:local` differ from `dev` and `start` only in overriding
+`SUPABASE_DB_URL`; a real environment variable beats the file, so nothing needs
+editing. The pipeline takes the same override:
+
+```bash
+SUPABASE_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+  uv run python -m pipeline publish
+```

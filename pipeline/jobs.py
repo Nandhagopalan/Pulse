@@ -13,7 +13,7 @@ from typing import Optional
 
 
 def eod(session: Optional[date] = None) -> None:
-    from .compute import analytics, publish
+    from .compute import analytics, publish, strategy
     from .ingest import backfill, reference
     from .ingest import corporate_actions as ca
 
@@ -41,6 +41,15 @@ def eod(session: Optional[date] = None) -> None:
     print("── analytics + publish ──────────────────────────────────")
     snap = analytics.compute()
     publish.run(snap)
+
+    print("── strategy ─────────────────────────────────────────────")
+    # Fails soft on purpose. The paper book is downstream of everything the
+    # terminal actually needs; a fault here must not cost the night's breadth,
+    # sector and metrics publish.
+    try:
+        strategy.run(session=today)
+    except Exception as err:  # noqa: BLE001 — a paper book is not worth a failed run
+        print(f"[eod] strategy engine failed ({err}) — snapshot already published")
 
     b = snap["breadth"]
     print(f"[eod] {snap['date']}: {b['universe']} stocks · "

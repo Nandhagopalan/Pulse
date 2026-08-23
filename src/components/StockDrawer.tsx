@@ -1,18 +1,16 @@
 import { useEffect, useMemo } from 'react';
 import { T, dirColor } from '../theme';
-import { Label, Mono, Meter } from './ui';
+import { Mono } from './ui';
 import { stockTag, breakSummary } from './StockTable';
 import type { Stock } from '../lib/data';
-import { ohlc, candleChart } from '../lib/candles';
+import { candleChart } from '../lib/candles';
+import { useCandles } from '../lib/useCandles';
 import { fmtPct, fmtPrice } from '../lib/format';
-import type { Profile } from '../lib/profile';
-import { fmtInr } from '../lib/profile';
 
-export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
+export function StockDrawer({ stock, watch, toggle, onClose }: {
   stock: Stock;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
-  profile: Profile;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -21,17 +19,8 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const candles = useMemo(() => ohlc(stock.sym, stock.price, 2.2, 60), [stock.sym, stock.price]);
+  const { candles, real } = useCandles(stock.sym, 60, stock.price, 2.2);
   const chart = useMemo(() => candleChart(candles, 380, 150, 6), [candles]);
-
-  // Position plan: stop under the lowest low of the last 10 sessions
-  const stop = Math.min(...candles.slice(-10).map(c => c.l)) * 0.995;
-  const perShareRisk = Math.max(0.01, stock.price - stop);
-  const riskAmt = profile.capital * profile.riskPct / 100;
-  const qty = Math.max(0, Math.floor(riskAmt / perShareRisk));
-  const posValue = qty * stock.price;
-  const posPct = posValue / profile.capital * 100;
-  const stopPct = (stop / stock.price - 1) * 100;
 
   const starred = !!watch[stock.sym];
 
@@ -82,37 +71,9 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
         <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 11, color: T.muted, flexWrap: 'wrap' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.amber }} />10 EMA {chart.ema10Last}</span>
           <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 12, height: 2, background: T.navy }} />50 EMA {chart.ema50Last}</span>
-          <span style={{ color: T.faint }}>60 sessions · sample</span>
+          <span style={{ color: T.faint }}>{candles.length} sessions · {real ? 'NSE EOD (adjusted)' : 'sample'}</span>
         </div>
 
-        <div style={{ marginTop: 22, background: T.cardAlt, border: '1px solid ' + T.borderSoft, borderRadius: 12, padding: '16px 18px' }}>
-          <Label>Position plan · {profile.riskPct}% risk</Label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 18px', marginTop: 12 }}>
-            <div>
-              <div style={{ fontSize: 11, color: T.muted }}>Entry</div>
-              <Mono size={14} weight={600}>{fmtPrice(stock.price)}</Mono>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: T.muted }}>Stop · 10-day low</div>
-              <Mono size={14} weight={600} color={T.down}>{fmtPrice(stop)} <span style={{ fontSize: 11 }}>({stopPct.toFixed(1)}%)</span></Mono>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: T.muted }}>Quantity</div>
-              <Mono size={14} weight={600}>{qty.toLocaleString('en-IN')}</Mono>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: T.muted }}>Position value</div>
-              <Mono size={14} weight={600} color={T.amber}>{fmtInr(posValue)}</Mono>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
-            <Meter pct={posPct} color={posPct > 40 ? T.down : T.navy} />
-            <Mono size={11.5} color={T.muted}>{posPct.toFixed(0)}% of capital</Mono>
-          </div>
-          <div style={{ fontSize: 11, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>
-            Risking {fmtInr(profile.capital * profile.riskPct / 100)} if the stop is hit. Adjust capital and risk in your profile.
-          </div>
-        </div>
       </div>
     </>
   );

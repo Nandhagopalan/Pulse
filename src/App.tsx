@@ -21,6 +21,7 @@ import type { HighMode } from './components/tabs/HighsTab';
 import { DrawdownTab } from './components/tabs/DrawdownTab';
 import { WatchTab } from './components/tabs/WatchTab';
 import { NewsTab } from './components/tabs/NewsTab';
+import { StrategyTab } from './components/tabs/StrategyTab';
 
 const DEFAULT_QUOTES = [
   'The trend is your friend until the end when it bends.',
@@ -30,7 +31,7 @@ const DEFAULT_QUOTES = [
   'No setup, no trade. Cash is a position.',
 ];
 
-type TabId = 'breadth' | 'chart' | 'sectors' | 'highs' | 'draw' | 'watch' | 'news';
+type TabId = 'breadth' | 'chart' | 'sectors' | 'highs' | 'draw' | 'watch' | 'news' | 'strategy';
 type CardMode = 'area' | 'bar';
 
 const TAB_META: Record<TabId, { label: string; sub: string; slug: string }> = {
@@ -41,6 +42,7 @@ const TAB_META: Record<TabId, { label: string; sub: string; slug: string }> = {
   draw: { label: 'Drawdown', sub: 'How far stocks sit off their peaks', slug: 'drawdown' },
   watch: { label: 'Watchlist', sub: 'Your swing candidates', slug: 'watchlist' },
   news: { label: 'News', sub: 'Headlines for your watchlist', slug: 'news' },
+  strategy: { label: 'Strategy', sub: 'Rules-based paper book', slug: 'strategy' },
 };
 
 const TAB_IDS = Object.keys(TAB_META) as TabId[];
@@ -157,7 +159,7 @@ export default function App() {
   const { quoteText, shuffle, addQuote } = useQuotes();
   const market = useMarket();
   const { watch, toggle } = useWatchlist(market.auth === 'authed');
-  const { profile, update } = useProfile(market.user);
+  const { profile } = useProfile(market.user);
 
   // The URL is the single source of truth for which page is showing and how it
   // is filtered, so every view is reachable by link and survives a reload.
@@ -298,6 +300,7 @@ export default function App() {
     { id: 'draw', label: 'Drawdown', icon: 'draw' },
     { id: 'watch', label: 'Watchlist', icon: 'watch', count: watchCount },
     { id: 'news', label: 'News', icon: 'news' },
+    { id: 'strategy', label: 'Strategy', icon: 'strategy' },
   ];
 
   const indices = D.indices.map(ix => {
@@ -338,7 +341,7 @@ export default function App() {
         <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <TopBar
             title={TAB_META[tab].label}
-            profile={profile} updateProfile={update} watchCount={watchCount}
+            profile={profile} watchCount={watchCount}
             sessionUser={market.user} asOf={market.asOf}
             onRefresh={() => market.refresh()}
             onLogout={() => { void logout().then(() => window.location.reload()); }}
@@ -418,8 +421,9 @@ export default function App() {
               />
             )}
             {tab === 'draw' && <DrawdownTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} media={media} />}
-            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} media={media} onSearch={() => setSearch('jump')} query={tableQuery} setQuery={setTableQuery} />}
+            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} media={media} onSearch={() => setSearch('jump')} query={tableQuery} setQuery={setTableQuery} />}
             {tab === 'news' && <NewsTab D={D} route={route} navigate={navigate} watch={watch} />}
+            {tab === 'strategy' && <StrategyTab D={D} route={route} navigate={navigate} />}
           </div>
         </main>
       </div>
@@ -442,7 +446,6 @@ export default function App() {
           stock={drawerStock}
           watch={watch}
           toggle={toggle}
-          profile={profile}
           onClose={() => setDrawerSym(null)}
         />
       )}

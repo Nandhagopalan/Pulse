@@ -29,3 +29,9 @@ jobs:
 
       - name: mypy
         run: uv run mypy
+
+      # tests/test_windows.py pins the pipeline's numpy rolling windows to the
+      # pandas implementation the strategy was validated against. If those drift,
+      # the traded strategy quietly stops being the tested one.
+      - name: pytest
+        run: uv run pytest tests/ -q
