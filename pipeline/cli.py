@@ -86,9 +86,10 @@ def main(argv=None) -> int:
         from .compute import analytics
         snap = analytics.compute()
         b = snap["breadth"]
+        breaks = sum(1 for s in snap["stocks"] if s.get("trendBreak"))
         print(f"[analytics] {snap['date']}: {b['universe']} stocks, "
               f"{len(snap['sectors'])} sectors, adv {b['advances']} / dec {b['declines']}, "
-              f"new highs {b['newHighs']}, at ATH {b['athCount']}")
+              f"new highs {b['newHighs']}, at ATH {b['athCount']}, trendline breaks {breaks}")
 
     elif args.cmd == "publish":
         from .compute import publish

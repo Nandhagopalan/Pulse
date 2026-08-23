@@ -35,6 +35,22 @@ WINDOW = 520
 HIST = 120      # sessions of breadth history published
 CANDLES = 500   # adjusted candles cached per symbol for the chart endpoint
 
+# ── Weekly structure ─────────────────────────────────────────────────────────
+# A trendline break is a weekly-timeframe event. The lines that matter are
+# anchored years back — well outside the 520-session daily window — and a daily
+# chart is too noisy to place them on anyway. Rather than widen WINDOW, which
+# would double the adjustment join and every matrix held in memory, the
+# structure layer gets its own small load: ~4 years of weekly bars, aggregated
+# down in DuckDB so what lands in Python is a fifth of the rows.
+WEEKS = 210
+K_SWING = 3          # weeks either side that make a weekly high a swing pivot
+MIN_SPAN = 12        # weeks a line must cap price before breaking it means anything
+BREAK_MARGIN = 0.01  # the weekly close has to clear the line by this much
+TOUCH_TOL = 0.03     # a swing high this near the line counts as touching it
+MIN_TOUCHES = 3      # anchor, the pivot that sets the slope, and one more
+HOLD_WEEKS = 8       # a break stays flagged this long, while price holds above
+MIN_TURNOVER = 2e7   # ₹2 cr/week — below this the break is not tradeable
+
 def _uris():
     """
     Dataset locations, honouring `--local` mode.
@@ -141,6 +157,188 @@ def _load_aths(con) -> Dict[str, dict]:
     return {r[0]: {"high": r[1], "date": r[2].isoformat(), "since": r[3].isoformat()} for r in rows}
 
 
+def _load_weekly(con) -> dict:
+    """
+    Split-adjusted weekly OHLCV for the last WEEKS weeks, as symbol-major matrices.
+
+    Resampled in SQL rather than in numpy: the group-by is one streaming pass
+    over a slice already partitioned by date, and it hands Python ~210 rows per
+    symbol instead of the ~1,050 daily bars behind them. The current week is
+    included while still partial — a breakout should be visible on the day it
+    happens, not the following Monday.
+    """
+    daily_glob, _, actions_uri, _ = _uris()
+    start = con.execute(
+        f"""
+        SELECT MIN(w) FROM (
+            SELECT DISTINCT CAST(date_trunc('week', date) AS DATE) AS w
+            FROM read_parquet('{daily_glob}')
+            ORDER BY w DESC LIMIT {WEEKS}
+        )
+        """
+    ).fetchone()[0]
+
+    cte = ca.adjusted_bars_cte(daily_glob, actions_uri, min_date=start.isoformat())
+    tbl = con.execute(
+        cte + """
+        SELECT symbol,
+               CAST(date_trunc('week', date) AS DATE) AS wk,
+               MAX(high)            AS high,
+               arg_max(close, date) AS close,
+               SUM(volume)          AS volume,
+               SUM(traded_value)    AS turnover
+        FROM bars_adj
+        GROUP BY symbol, wk
+        ORDER BY symbol, wk
+        """
+    ).fetch_arrow_table()
+
+    symbols = np.asarray(tbl.column("symbol").to_pylist(), dtype=object)
+    weeks = tbl.column("wk").to_numpy(zero_copy_only=False).astype("datetime64[D]")
+    uniq_sym, sym_idx = np.unique(symbols, return_inverse=True)
+    uniq_wk, wk_idx = np.unique(weeks, return_inverse=True)
+    shape = (len(uniq_sym), len(uniq_wk))
+
+    def matrix(col: str) -> np.ndarray:
+        m = np.full(shape, np.nan)
+        m[sym_idx, wk_idx] = tbl.column(col).to_numpy(zero_copy_only=False).astype(np.float64)
+        return m
+
+    return {
+        "symbols": uniq_sym,
+        "weeks": uniq_wk,
+        "high": matrix("high"),
+        "close": matrix("close"),
+        "volume": matrix("volume"),
+        "turnover": matrix("turnover"),
+    }
+
+
+def _recent_break(hv: np.ndarray, cv: np.ndarray, tv: np.ndarray, p: int, n: int):
+    """
+    Where the descending line anchored at pivot `p` has just given way.
+
+    The tightest such line is the one whose slope is the running maximum of
+    (high[k] - high[p]) / (t[k] - t[p]): at any week it sits on or above every
+    high since the anchor, so it has demonstrably capped price for the whole span
+    behind it. Taking the running maximum is what lets the search be one
+    vectorised pass per anchor rather than a scan over every pair of pivots.
+
+    Note what is deliberately *not* asked: whether this is the first time the
+    anchor's line ever broke. An earlier, steeper draw of the same line can be
+    pierced by a single 1% close and recover, and a trader would simply redraw
+    it through the new lower high — so consuming the anchor on that first poke
+    throws away exactly the multi-year lines worth having. What counts is a week
+    that clears the line when the week before it did not, inside the window where
+    that is still news.
+
+    Returns (position of the break week, slope) or None.
+    """
+    dt = tv[p + 1:] - tv[p]
+    rel = (hv[p + 1:] - hv[p]) / dt
+    run = np.maximum.accumulate(rel)
+    # The break week's own high must not help define the line it breaks, so each
+    # candidate is judged against the slope the weeks before it had already set.
+    slope = np.empty_like(run)
+    slope[0] = np.nan
+    slope[1:] = run[:-1]
+    line = hv[p] + slope * dt
+    with np.errstate(invalid="ignore"):
+        clear = (slope < 0) & (dt >= MIN_SPAN) & (cv[p + 1:] > line * (1 + BREAK_MARGIN))
+    # A break is a week that clears a line the previous week did not. Weeks two
+    # and three of a hold are still above the line but are not the event.
+    fresh = clear.copy()
+    fresh[1:] &= ~clear[:-1]
+    hit = np.flatnonzero(fresh & (tv[p + 1:] >= n - HOLD_WEEKS))
+    if hit.size == 0:
+        return None
+    j = int(hit[0])
+    return p + 1 + j, float(slope[j])
+
+
+def _trend_breaks(wk: dict) -> Dict[str, dict]:
+    """
+    Per symbol, the descending weekly trendline that has just been broken.
+
+    Where the 52-week and all-time tags ask "is price at an extreme right now",
+    this asks "has a level that held for months stopped holding" — which is the
+    case they structurally cannot see, since a stock clearing a two-year
+    downtrend line is usually still well below both extremes.
+
+    Two consequences follow from that difference and are deliberate. The flag
+    persists for HOLD_WEEKS after the event instead of firing for one session,
+    because a screener checked in the evening should not depend on being opened
+    on exactly the right day. And it is dropped the moment price closes back
+    under the line, because a break that is handed straight back is not one.
+
+    Among the lines a symbol has broken, the winner is the one that capped price
+    longest: a two-year downtrend giving way says more than a two-month one.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    high, close, vol, turn = wk["high"], wk["close"], wk["volume"], wk["turnover"]
+    weeks = wk["weeks"]
+    n_sym, n = high.shape
+    out: Dict[str, dict] = {}
+    if n < MIN_SPAN + 2 * K_SWING + 2:
+        return out
+
+    span = 2 * K_SWING + 1
+    for r in range(n_sym):
+        # Compact away the weeks this symbol did not trade, keeping the real week
+        # index alongside: slopes are per week elapsed, so a gap must widen the
+        # line's run rather than quietly shorten it.
+        tv = np.flatnonzero(~np.isnan(high[r]))
+        if tv.size < MIN_SPAN + span + 1 or tv[-1] < n - 2:
+            continue
+        hv, cv = high[r][tv], close[r][tv]
+        if np.isnan(cv[-1]):
+            continue
+
+        win = sliding_window_view(hv, span)
+        pivots = np.flatnonzero(hv[K_SWING:hv.size - K_SWING] == win.max(axis=1)) + K_SWING
+
+        best = None
+        for p in pivots:
+            found = _recent_break(hv, cv, tv, int(p), n)
+            if found is None:
+                continue
+            q, slope = found
+            base, t0 = hv[p], tv[p]
+            if cv[-1] <= base + slope * (tv[-1] - t0):
+                continue  # broke, then handed the level straight back
+            # A line needs more than the two points that draw it to be a line at
+            # all: the anchor, the pivot whose slope it takes, and one more that
+            # came down to it and turned.
+            seen = pivots[(pivots >= p) & (pivots < q)]
+            lvl = base + slope * (tv[seen] - t0)
+            touches = int((np.abs(hv[seen] - lvl) <= TOUCH_TOL * lvl).sum())
+            if touches < MIN_TOUCHES:
+                continue
+            if best is None or tv[q] - t0 > best[0]:
+                best = (tv[q] - t0, q, touches, float(base + slope * (tv[q] - t0)))
+        if best is None:
+            continue
+
+        held, q, touches, level = best
+        vv = vol[r][tv]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # a fresh listing has no prior weeks
+            base = np.nanmean(vv[max(0, q - 10):q])
+        if np.nanmean(turn[r][tv][max(0, q - 10):q + 1]) < MIN_TURNOVER:
+            continue
+        out[str(wk["symbols"][r])] = {
+            "trendBreak": True,
+            "breakDate": str(weeks[tv[q]]),
+            "breakWeeks": int(tv[-1] - tv[q]),
+            "breakLevel": round(level, 2),
+            "breakVol": round(float(vv[q] / base), 1) if base and base > 0 else None,
+            "trendWeeks": int(held),
+            "trendTouches": touches,
+        }
+    return out
+
+
 def _load_sectors(con) -> Dict[str, str]:
     constituents = _uris()[3]
     try:
@@ -218,6 +416,7 @@ def compute(con=None) -> dict:
         aths = _load_aths(con)
         sector_of = _load_sectors(con)
         indices = _load_index_window(con, str(dates[max(0, n_t - 260)]))
+        breaks = _trend_breaks(_load_weekly(con))
 
         e10 = _ema_matrix(close, 10)
         e20 = _ema_matrix(close, 20)
@@ -323,7 +522,7 @@ def compute(con=None) -> dict:
                 if not np.isnan(base) and base > 0:
                     rs = float((price / base) / bench_ret63 * 100 - 100)
 
-            stocks.append({
+            row = {
                 "sym": sym,
                 "sector": sector_of.get(sym, "Other"),
                 "price": price,
@@ -342,7 +541,12 @@ def compute(con=None) -> dict:
                 "volume": _f(vol[i, last]) or 0.0,
                 "deliveryPct": delivery.get(sym),
                 "turnover": (_f(vol[i, last]) or 0.0) * price,
-            })
+                "trendBreak": False,
+            }
+            # Present only on the symbols that have one, so the ~2,800 rows that
+            # do not stay the size they already were in the published payload.
+            row.update(breaks.get(sym, {}))
+            stocks.append(row)
         agg["athCount"][HIST - 1] = ath_count
 
         sectors = _sector_scores(stocks)

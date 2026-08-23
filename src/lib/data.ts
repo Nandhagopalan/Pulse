@@ -17,6 +17,24 @@ export interface Stock {
   isATH: boolean; is52: boolean; wkBreak: boolean;
   /** First session of stored history — how far back "all-time" actually reaches. */
   athSince?: string | null;
+  /**
+   * A descending weekly trendline broken recently and still holding. Unlike the
+   * three flags above — which ask where price is right now — this one is about a
+   * level that stopped holding, so the fields below only exist on the symbols
+   * where it fired.
+   */
+  trendBreak?: boolean;
+  /** Monday of the week the line gave way. */
+  breakDate?: string;
+  /** Weeks since the break; 0 is the current, still-unfinished week. */
+  breakWeeks?: number;
+  /** The line's value where it broke — the level the move has to hold. */
+  breakLevel?: number;
+  /** Break-week volume against the ten weeks before it. */
+  breakVol?: number | null;
+  /** Weeks the line capped price before it broke, and pivots it touched. */
+  trendWeeks?: number;
+  trendTouches?: number;
 }
 
 export interface Sector {

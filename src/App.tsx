@@ -48,7 +48,7 @@ const SLUG_TO_TAB: Record<string, TabId> = Object.fromEntries(
   TAB_IDS.map(id => [TAB_META[id].slug, id]),
 );
 
-const HIGH_MODES: HighMode[] = ['w52', 'ath', 'wk'];
+const HIGH_MODES: HighMode[] = ['w52', 'ath', 'wk', 'trend'];
 const DEFAULT_HIGH_MODE: HighMode = 'w52';
 const DEFAULT_CHART_SYM = 'NIFTY 50';
 const ALL_SECTORS = 'All sectors';

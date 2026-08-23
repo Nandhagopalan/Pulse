@@ -4,7 +4,7 @@ import { FilterBox } from '../FilterBox';
 import type { MarketData, Stock } from '../../lib/data';
 import { filterStocks } from '../../lib/search';
 
-export type HighMode = 'w52' | 'ath' | 'wk';
+export type HighMode = 'w52' | 'ath' | 'wk' | 'trend';
 
 export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilter, query, setQuery, watch, toggle, onOpen }: {
   D: MarketData;
@@ -22,13 +22,16 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
     ath: D.stocks.filter(s => s.isATH),
     w52: D.stocks.filter(s => s.is52),
     wk: D.stocks.filter(s => s.wkBreak),
+    trend: D.stocks.filter(s => s.trendBreak),
   };
   const modes: { id: HighMode; label: string }[] = [
     { id: 'w52', label: '52-week highs' },
     { id: 'ath', label: 'All-time highs' },
     { id: 'wk', label: 'Weekly breakouts' },
+    { id: 'trend', label: 'Trendline breaks' },
   ];
   const pool = pools[highMode];
+  const trend = highMode === 'trend';
   // Counts reflect the active high-mode, so the dropdown shows where the
   // breakouts actually are before you commit to a sector.
   const perSector: Record<string, number> = {};
@@ -68,7 +71,11 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
           watch={watch}
           toggle={toggle}
           onOpen={onOpen}
-          initialSort={{ key: 'chg1w', dir: 'desc' }}
+          trend={trend}
+          // The longest line broken leads: a two-year downtrend giving way is a
+          // bigger event than a two-month one, and week-on-week change says
+          // nothing about which of these is worth reading first.
+          initialSort={trend ? { key: 'trendWeeks', dir: 'desc' } : { key: 'chg1w', dir: 'desc' }}
           footnote={rows.length + ' stocks · click any column header to sort · click a row for detail, star it to watch'}
         />
       </div>

@@ -6,21 +6,42 @@ import { fmtPct, fmtPrice } from '../lib/format';
 import { useSort, sortLabel } from '../lib/sort';
 import type { SortSpec, SortState } from '../lib/sort';
 
-const GRID = '34px 1.1fr 1.1fr 0.85fr 0.6fr 0.6fr 0.75fr 0.85fr';
+const GRID = '34px 1.1fr 1.1fr 0.85fr 0.6fr 0.6fr 0.75fr 1.5fr';
 
 /**
  * Below this width the eight columns stop being readable, so the table keeps
  * its full width and scrolls sideways inside its own card instead of letting
- * the columns collapse into each other.
+ * the columns collapse into each other. The last column is sized to hold a
+ * position tag and a TREND BREAK side by side without wrapping the row.
  */
-export const TABLE_MIN_WIDTH = 760;
+export const TABLE_MIN_WIDTH = 820;
 
+/**
+ * Where price is, and — separately — whether a level just gave way.
+ *
+ * These are two independent facts, not five rungs of one ladder. A stock can be
+ * running into its highs *and* have just cleared a two-year downtrend line, and
+ * collapsing that into a single most-specific label was what made the Weekly
+ * breakouts tab look like it was arguing with itself: a row selected for its
+ * momentum wore a tag that never mentioned momentum.
+ *
+ * So the position tag always renders, and TREND BREAK sits beside it when there
+ * is one. The position tag stays rightmost so the column keeps a clean edge to
+ * scan down, with the rarer pill jutting left only on the rows that earn it.
+ */
 export function stockTag(s: Stock) {
-  if (s.isATH) return <Tag color={T.card} bg={T.ink}>ATH</Tag>;
-  if (s.is52) return <Tag color={T.up} bg={T.upSoft}>52W HIGH</Tag>;
-  if (s.wkBreak) return <Tag color={T.amber} bg={T.amberSoft}>BREAKOUT</Tag>;
-  if (s.distATH < 10) return <Tag color={T.navy} bg={T.navySoft}>NEAR HIGH</Tag>;
-  return <Tag color={T.muted} bg={T.borderSoft}>OFF HIGHS</Tag>;
+  const position = s.isATH ? <Tag color={T.card} bg={T.ink}>ATH</Tag>
+    : s.is52 ? <Tag color={T.up} bg={T.upSoft}>52W HIGH</Tag>
+    : s.wkBreak ? <Tag color={T.amber} bg={T.amberSoft}>BREAKOUT</Tag>
+    : s.distATH < 10 ? <Tag color={T.navy} bg={T.navySoft}>NEAR HIGH</Tag>
+    : <Tag color={T.muted} bg={T.borderSoft}>OFF HIGHS</Tag>;
+  if (!s.trendBreak) return position;
+  return (
+    <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 5, alignItems: 'center', justifyContent: 'flex-end' }}>
+      <Tag color={T.brand700} bg={T.brand50}>TREND BREAK</Tag>
+      {position}
+    </span>
+  );
 }
 
 /**
@@ -104,7 +125,18 @@ const COLS: HeadCol[] = [
   { key: 'tag', label: 'Tag', align: 'right' },
 ];
 
-const tagRank = (s: Stock) => s.isATH ? 5 : s.is52 ? 4 : s.wkBreak ? 3 : s.distATH < 10 ? 2 : 1;
+// The trendline pool swaps one column rather than adding one: every stock in it
+// is by definition well off its highs, so "From ATH" is the least informative
+// cell on the row, and holding the count at eight keeps the phone layout put.
+const TREND_COLS: HeadCol[] = COLS.map(c =>
+  c.key === 'distATH' ? { key: 'trendWeeks', label: 'Line broken', align: 'right' as const } : c);
+
+// Position sets the rung; a broken line lifts a stock half a step above its
+// peers on that rung rather than displacing it to one of its own.
+const tagRank = (s: Stock) => {
+  const position = s.isATH ? 5 : s.is52 ? 4 : s.wkBreak ? 3 : s.distATH < 10 ? 2 : 1;
+  return s.trendBreak ? position + 0.5 : position;
+};
 
 const SPECS: SortSpec<Stock>[] = [
   { key: 'sym', value: s => s.sym, first: 'asc' },
@@ -113,10 +145,20 @@ const SPECS: SortSpec<Stock>[] = [
   { key: 'chg1d', value: s => s.chg1d },
   { key: 'chg1w', value: s => s.chg1w },
   { key: 'distATH', value: s => s.distATH, first: 'asc' },
+  { key: 'trendWeeks', value: s => s.trendWeeks ?? 0 },
   { key: 'tag', value: s => tagRank(s) },
 ];
 
-export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSort, dense }: {
+/** "A 151-week descending trendline broke in the week of 2026-07-27, on 2.4x …" */
+export function breakSummary(s: Stock): string {
+  if (!s.trendBreak) return '';
+  const vol = s.breakVol ? ', on ' + s.breakVol.toFixed(1) + 'x the prior ten weeks of volume' : '';
+  const age = s.breakWeeks === 0 ? 'this week' : 'in the week of ' + s.breakDate;
+  return `A ${s.trendWeeks}-week descending trendline, touched ${s.trendTouches} times, broke ${age}${vol}. `
+    + `It gave way at ${s.breakLevel?.toFixed(2)} — the level the move has to hold.`;
+}
+
+export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSort, dense, trend }: {
   stocks: Stock[];
   watch: Record<string, true>;
   toggle: (sym: string) => void;
@@ -124,13 +166,16 @@ export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSor
   footnote: string;
   initialSort?: SortState;
   dense?: boolean;
+  /** Show the broken-line column in place of "From ATH". */
+  trend?: boolean;
 }) {
+  const cols = trend ? TREND_COLS : COLS;
   const { sorted, sort, onSort } = useSort(stocks, SPECS, initialSort || { key: 'chg1w', dir: 'desc' });
   const pad = dense ? '8px 22px' : '10px 22px';
 
   return (
     <TableShell>
-      <TableHead grid={GRID} cols={COLS} sort={sort} onSort={onSort} />
+      <TableHead grid={GRID} cols={cols} sort={sort} onSort={onSort} />
       {sorted.map(s => {
         const starred = !!watch[s.sym];
         return (
@@ -147,12 +192,19 @@ export function StockTable({ stocks, watch, toggle, onOpen, footnote, initialSor
             <div style={{ textAlign: 'right' }}><Mono size={12.5}>{fmtPrice(s.price)}</Mono></div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5} color={dirColor(s.chg1d)}>{fmtPct(s.chg1d)}</Mono></div>
             <div style={{ textAlign: 'right' }}><Mono size={12.5} color={dirColor(s.chg1w)}>{fmtPct(s.chg1w)}</Mono></div>
-            <div style={{ textAlign: 'right' }}><Mono size={12.5} color={T.muted}>{s.distATH < 0.05 ? '0.0%' : '-' + s.distATH.toFixed(1) + '%'}</Mono></div>
+            {trend ? (
+              <div style={{ textAlign: 'right' }} title={breakSummary(s)}>
+                <Mono size={12.5}>{s.trendWeeks}w</Mono>
+                <Mono size={11} color={T.faint}>{s.breakWeeks === 0 ? ' · now' : ' · ' + s.breakWeeks + 'w ago'}</Mono>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'right' }}><Mono size={12.5} color={T.muted}>{s.distATH < 0.05 ? '0.0%' : '-' + s.distATH.toFixed(1) + '%'}</Mono></div>
+            )}
             <div style={{ textAlign: 'right' }}>{stockTag(s)}</div>
           </div>
         );
       })}
-      <Footnote>{footnote} · {sortLabel(sort, COLS.filter(c => c.key).map(c => ({ key: c.key!, label: c.label })))}</Footnote>
+      <Footnote>{footnote} · {sortLabel(sort, cols.filter(c => c.key).map(c => ({ key: c.key!, label: c.label })))}</Footnote>
     </TableShell>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { T, dirColor } from '../theme';
 import { Label, Mono, Meter } from './ui';
-import { stockTag } from './StockTable';
+import { stockTag, breakSummary } from './StockTable';
 import type { Stock } from '../lib/data';
 import { ohlc, candleChart } from '../lib/candles';
 import { fmtPct, fmtPrice } from '../lib/format';
@@ -41,7 +41,8 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
       <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, maxWidth: '100vw', background: T.card, boxShadow: '-12px 0 40px rgba(15,23,42,0.10)', zIndex: 51, overflowY: 'auto', overflowX: 'hidden', padding: 'clamp(16px, 4vw, 26px)', paddingBottom: 32, animation: 'drawer-in 180ms ease' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {/* Wraps because a long symbol next to two tags overruns the 440px drawer. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 600, color: T.ink }}>{stock.sym}</span>
               {stockTag(stock)}
             </div>
@@ -62,6 +63,12 @@ export function StockDrawer({ stock, watch, toggle, profile, onClose }: {
           {stock.distATH < 0.05 ? 'Trading at its all-time high' : stock.distATH.toFixed(1) + '% below all-time high'}
           {stock.athSince && <span> · since {stock.athSince.slice(0, 4)}</span>}
         </div>
+
+        {stock.trendBreak && (
+          <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: T.brand50, fontSize: 12.5, color: T.text, lineHeight: 1.5 }}>
+            {breakSummary(stock)}
+          </div>
+        )}
 
         <svg viewBox="0 0 380 150" preserveAspectRatio="none" style={{ width: '100%', height: 150, marginTop: 16, display: 'block', overflow: 'visible' }}>
           <path d="M0 38 H380 M0 75 H380 M0 112 H380" stroke={T.borderSoft} strokeWidth={1} />

@@ -89,6 +89,13 @@ async function buildSummary(): Promise<Record<string, unknown> | null> {
       sym: s.sym, sector: s.sector, price: s.price, chg1d: s.chg1d, chg1w: s.chg1w,
       distATH: s.distATH, isATH: s.isATH, is52: s.is52, wkBreak: s.wkBreak,
       athSince: s.athSince ?? null,
+      // Only the symbols with a live trendline break carry these, so spreading
+      // the row would ship six nulls for every one of the ~2,800 that do not.
+      ...(s.trendBreak ? {
+        trendBreak: true, breakDate: s.breakDate, breakWeeks: s.breakWeeks,
+        breakLevel: s.breakLevel, breakVol: s.breakVol ?? null,
+        trendWeeks: s.trendWeeks, trendTouches: s.trendTouches,
+      } : {}),
     })),
     sectors,
     universe: breadth.universe,
