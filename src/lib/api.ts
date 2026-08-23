@@ -90,20 +90,6 @@ export function importWatchlist(symbols: string[]): Promise<{ symbols: string[] 
   });
 }
 
-export interface StoredPrefs { capital: number; riskPct: number; maxPos: number }
-
-export function fetchPrefs(): Promise<{ prefs: StoredPrefs | null }> {
-  return request('/api/prefs');
-}
-
-export function savePrefs(prefs: StoredPrefs): Promise<{ prefs: StoredPrefs }> {
-  return request('/api/prefs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(prefs),
-  });
-}
-
 export const googleLoginUrl = '/auth/google/login';
 
 /** Human-readable reason for a bounced sign-in, from the `?login=` query param. */
@@ -118,4 +104,78 @@ export function loginErrorMessage(search: string): string | null {
   if (reason === 'email_unverified') return 'Your Google account has no verified email address.';
   if (reason === 'bad_state') return 'Sign-in expired or was tampered with. Please try again.';
   return 'Sign-in failed. Please try again.';
+}
+
+// ── Strategy engine ─────────────────────────────────────────────────────────
+
+export interface StrategySignal {
+  symbol: string; rank: number; ref_close: number; stop: number; stop_pct: number;
+  atr: number | null; rs_pct: number | null; sector: string | null;
+  turnover_20d: number | null; qty: number; position_value: number; risk_amount: number;
+  status: string; skip_reason: string | null;
+}
+
+export interface StrategyPosition {
+  id: number; symbol: string; sector: string | null; entry_date: string; entry_px: number;
+  qty: number; init_stop: number; stop: number; r_per_share: number; last_px: number | null;
+  bars: number; pending_exit: string | null; config_version: number; origin: string;
+}
+
+export interface StrategyClosed {
+  symbol: string; sector: string | null; entry_date: string; entry_px: number;
+  exit_date: string; exit_px: number; qty: number; bars: number;
+  exit_reason: string; pnl: number; r_multiple: number; origin: string;
+}
+
+export interface StrategyState {
+  date: string; regime_on: boolean; ew_index: number | null; ew_ma: number | null;
+  universe_n: number | null; equity: number; cash: number; deployed: number; n_open: number;
+}
+
+export interface StrategySummary {
+  book: {
+    id: string; fillMode: string; configVersion: number; capital: number;
+    startedOn: string | null; config: Record<string, unknown> | null;
+  };
+  books: string[];
+  state: StrategyState | null;
+  performance: {
+    days: number; equity?: number; capital?: number;
+    totalReturn: number | null; cagr: number | null; maxDrawdown: number | null;
+  };
+  equity: { date: string; equity: number; deployed: number; regime_on: boolean }[];
+  positions: StrategyPosition[];
+  signals: StrategySignal[];
+  closed: StrategyClosed[];
+}
+
+export interface NewPosition {
+  book: string; symbol: string; entry_date: string; entry_px: number;
+  stop: number; qty: number; sector?: string | null;
+}
+
+export function addStrategyPosition(p: NewPosition): Promise<{ ok: true }> {
+  return request('/api/strategy/positions', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(p),
+  });
+}
+
+export function closeStrategyPosition(
+  id: number, exit_date: string, exit_px: number, reason?: string,
+): Promise<{ ok: true; pnl: number }> {
+  return request(`/api/strategy/positions/${id}/close`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ exit_date, exit_px, reason }),
+  });
+}
+
+export function resetStrategy(capital: number): Promise<{ ok: true; capital: number }> {
+  return request('/api/strategy/reset', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ capital, confirm: true }),
+  });
+}
+
+export function fetchStrategy(book?: string): Promise<StrategySummary> {
+  return request<StrategySummary>('/api/strategy/summary' + (book ? `?book=${encodeURIComponent(book)}` : ''));
 }

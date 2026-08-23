@@ -4,16 +4,13 @@ import { StockTable } from '../StockTable';
 import { FilterBox } from '../FilterBox';
 import { filterStocks } from '../../lib/search';
 import type { MarketData } from '../../lib/data';
-import type { Profile } from '../../lib/profile';
-import { fmtInr } from '../../lib/profile';
 import { cols, type Media } from '../../lib/useMedia';
 
-export function WatchTab({ D, watch, toggle, onOpen, profile, media, onSearch, query, setQuery }: {
+export function WatchTab({ D, watch, toggle, onOpen, media, onSearch, query, setQuery }: {
   D: MarketData;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
-  profile: Profile;
   media: Media;
   onSearch?: () => void;
   query: string;
@@ -45,16 +42,14 @@ export function WatchTab({ D, watch, toggle, onOpen, profile, media, onSearch, q
   const avg1w = tracked.reduce((a, s) => a + s.chg1w, 0) / tracked.length;
   const avgFromAth = tracked.reduce((a, s) => a + s.distATH, 0) / tracked.length;
   const atHighs = tracked.filter(s => s.isATH || s.is52).length;
-  const slots = profile.maxPos - tracked.length;
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: cols(media, 4, 2, 2), gap: media.isMobile ? 10 : 14, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: cols(media, 3, 2, 2), gap: media.isMobile ? 10 : 14, marginBottom: 16 }}>
         {[
-          { label: 'Tracked', value: String(tracked.length), color: T.ink, sub: slots >= 0 ? slots + ' slots free of ' + profile.maxPos : Math.abs(slots) + ' over your ' + profile.maxPos + ' max' },
+          { label: 'Tracked', value: String(tracked.length), color: T.ink, sub: 'on your watchlist' },
           { label: 'Avg 1W move', value: (avg1w >= 0 ? '+' : '') + avg1w.toFixed(1) + '%', color: dirColor(avg1w), sub: 'across watchlist' },
           { label: 'Avg from ATH', value: '-' + avgFromAth.toFixed(1) + '%', color: avgFromAth < 10 ? T.up : T.amber, sub: atHighs + ' at 52w or all-time highs' },
-          { label: 'Risk / trade', value: fmtInr(profile.capital * profile.riskPct / 100), color: T.amber, sub: profile.riskPct + '% of capital' },
         ].map(c => (
           <Card key={c.label} style={{ padding: '14px 18px' }}>
             <Label>{c.label}</Label>
@@ -78,7 +73,7 @@ export function WatchTab({ D, watch, toggle, onOpen, profile, media, onSearch, q
         watch={watch}
         toggle={toggle}
         onOpen={onOpen}
-        footnote="Click a row for a position plan sized to your profile."
+        footnote="Click a row for price action and trend detail. Sizing lives on the Strategy tab."
       />
       )}
     </div>

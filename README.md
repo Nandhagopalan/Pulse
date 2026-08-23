@@ -15,7 +15,7 @@ integration; the numbers advance once a night when the pipeline runs.
 | `server/` | Backend: Google SSO + REST API — see [server/README.md](server/README.md) |
 | `api/` | Vercel adapter — serves `server/`'s routes as one function |
 | `pipeline/` | Python batch pipeline: NSE → R2 Parquet lake → DuckDB analytics → Supabase — see [pipeline/README.md](pipeline/README.md) |
-| `docs/` | [Architecture and deployment](docs/architecture.md) — how the system is built, and the Vercel port still pending |
+| `docs/` | [Architecture and deployment](docs/architecture.md) — how the system is built, and the Vercel port still pending<br>[Strategy engine](docs/strategy-engine.md) — the rules-based swing engine and its paper book |
 
 ## Quick start
 

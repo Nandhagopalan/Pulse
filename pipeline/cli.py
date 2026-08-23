@@ -52,6 +52,16 @@ def main(argv=None) -> int:
     p = sub.add_parser("eod", help="nightly chain")
     p.add_argument("--date", type=date.fromisoformat, help="session to ingest (default: latest)")
 
+    p = sub.add_parser("strategy", help="advance the paper book for the latest session")
+    p.add_argument("--book", action="append", help="book id; repeatable, default all enabled")
+    p.add_argument("--date", type=date.fromisoformat,
+                   help="session to advance (default: latest)")
+    p.add_argument("--capital", type=float, help="opening capital when creating the first book")
+    p.add_argument("--since", type=date.fromisoformat,
+                   help="advance every session from this date to the latest (catch-up)")
+    p.add_argument("--force", action="store_true",
+                   help="re-advance a session already recorded (repair; does not undo)")
+
     p = sub.add_parser("verify", help="audit one symbol end to end")
     p.add_argument("symbol")
     _add_store_args(p)
@@ -98,6 +108,11 @@ def main(argv=None) -> int:
     elif args.cmd == "eod":
         from . import jobs
         jobs.eod(args.date)
+
+    elif args.cmd == "strategy":
+        from .compute import strategy
+        strategy.run(book_ids=args.book, session=args.date, capital=args.capital,
+                     force=args.force, since=args.since)
 
     elif args.cmd == "verify":
         from . import verify
