@@ -6,6 +6,11 @@ import { fmtInr } from '../lib/profile';
 import { marketStatus } from '../lib/market';
 import type { SessionUser } from '../lib/api';
 
+// The palette's hotkey is shown on its trigger, spelled the way the platform
+// spells it — a Windows user reading "⌘K" learns nothing.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
+const SEARCH_HINT = IS_MAC ? '⌘K' : 'Ctrl K';
+
 function ProfileField({ label, value, onCommit, prefix }: {
   label: string; value: number; onCommit: (n: number) => void; prefix?: string;
 }) {
@@ -32,7 +37,7 @@ function ProfileField({ label, value, onCommit, prefix }: {
   );
 }
 
-export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout, isMobile, isTight, onOpenNav }: {
+export function TopBar({ title, profile, updateProfile, watchCount, sessionUser, asOf, onRefresh, onLogout, isMobile, isTight, onOpenNav, onOpenSearch }: {
   title: string;
   profile: Profile;
   updateProfile: (p: Partial<Prefs>) => void;
@@ -45,6 +50,7 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
   /** Too narrow for the clock and session pills, even if not a phone. */
   isTight?: boolean;
   onOpenNav?: () => void;
+  onOpenSearch?: () => void;
 }) {
   const [now, setNow] = useState(() => new Date());
   const [menuOpen, setMenuOpen] = useState(false);
@@ -91,6 +97,32 @@ export function TopBar({ title, profile, updateProfile, watchCount, sessionUser,
         </button>
       )}
       <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+
+      {/* This navigates, it does not filter the page — the tables have their own
+          FilterBox for that — so it reads "Jump to" and sits beside the title
+          rather than among the trailing actions. A phone has no keyboard
+          shortcut, which makes the icon the only way in. */}
+      {onOpenSearch && (isMobile ? (
+        <button
+          onClick={onOpenSearch}
+          title="Jump to symbol"
+          aria-label="Jump to symbol"
+          style={{ appearance: 'none', border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + T.border, borderRadius: 8, cursor: 'pointer', color: T.text, width: 34, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        </button>
+      ) : (
+        <button
+          onClick={onOpenSearch}
+          title={'Jump to symbol (' + SEARCH_HINT + ')'}
+          style={{ appearance: 'none', border: 0, background: T.card, boxShadow: 'inset 0 0 0 1px ' + T.border, borderRadius: 8, cursor: 'pointer', color: T.faint, fontFamily: T.sans, fontSize: 12.5, height: 32, width: isTight ? 150 : 220, padding: '0 8px 0 10px', display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', flexShrink: 0 }}
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Jump to symbol…</span>
+          <Mono size={10} color={T.faint} weight={600} style={{ background: T.cardAlt, borderRadius: 5, padding: '2px 5px', flexShrink: 0 }}>{SEARCH_HINT}</Mono>
+        </button>
+      ))}
+
       <div style={{ flex: 1 }} />
 
       {/* The clock and session pills are context, not controls — on a narrow

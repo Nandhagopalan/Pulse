@@ -11,6 +11,7 @@ import { Mono, Sparkline, ghostBtn, inkBtn, inputStyle } from './components/ui';
 import { Sidebar, type NavItem } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { StockDrawer } from './components/StockDrawer';
+import { SymbolSearch } from './components/SymbolSearch';
 import { BreadthTab, RANGES } from './components/tabs/BreadthTab';
 import type { BreadthRange } from './components/tabs/BreadthTab';
 import { ChartsTab } from './components/tabs/ChartsTab';
@@ -57,6 +58,13 @@ const DEFAULT_BREADTH_RANGE: BreadthRange = '1m';
 // authenticated load migrates whatever is still there onto the account, then
 // clears it so the browser copy can never drift from the server's.
 const LEGACY_WATCHLIST_KEY = 'pulse-watchlist';
+
+/** True while the keystroke belongs to a field the user is typing into. */
+function isTypingTarget(el: EventTarget | null): boolean {
+  const t = el as HTMLElement | null;
+  if (!t || !t.tagName) return false;
+  return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable;
+}
 
 const toWatchMap = (symbols: string[]): Record<string, true> =>
   Object.fromEntries(symbols.map(s => [s, true as const]));
@@ -140,6 +148,8 @@ export default function App() {
   const [addingQuote, setAddingQuote] = useState(false);
   const [quoteDraft, setQuoteDraft] = useState('');
   const [navOpen, setNavOpen] = useState(false);
+  // null when closed; the mode decides whether Enter opens a drawer or charts.
+  const [search, setSearch] = useState<'jump' | 'chart' | null>(null);
 
   const media = useMedia();
   const { isMobile } = media;
@@ -158,6 +168,7 @@ export default function App() {
     ? routeHighMode
     : DEFAULT_HIGH_MODE;
   const sectorFilter = route.query.get('sector') || ALL_SECTORS;
+  const tableQuery = route.query.get('q') || '';
   const drawerSym = route.query.get('stock');
 
   // Breadth history window (?range=1m); unknown values fall back to the default.
@@ -178,12 +189,28 @@ export default function App() {
   useEffect(() => {
     if (!isMobile && navOpen) setNavOpen(false);
   }, [isMobile, navOpen]);
+  // One effect for both overlays: two of them each saving and restoring
+  // `overflow` would restore a stale value when they overlap.
+  const lockScroll = navOpen || search !== null;
   useEffect(() => {
-    if (!navOpen) return;
+    if (!lockScroll) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
-  }, [navOpen]);
+  }, [lockScroll]);
+
+  // Cmd/Ctrl-K anywhere, or "/" when you are not already typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const combo = (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k';
+      const slash = e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !isTypingTarget(e.target);
+      if (!combo && !slash) return;
+      e.preventDefault();
+      setSearch('jump');
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   // Unknown or bare hashes settle on a canonical URL without adding history.
   const canonicalUnknown = !route.segments.length || !SLUG_TO_TAB[route.segments[0]];
@@ -199,13 +226,22 @@ export default function App() {
   };
   const setChartSym = (sym: string) => navigate(buildHash(['charts', sym]));
   const setHighMode = (m: HighMode) => {
+    // Switching high mode keeps the filters you set, text query included.
     const sector = route.query.get('sector');
-    navigate(buildHash(['highs', m], { sector }), { replace: true });
+    const q = route.query.get('q');
+    navigate(buildHash(['highs', m], { sector, q }), { replace: true });
   };
   const setSectorFilter = (s: string) => {
     const rest = route.segments.map(encodeURIComponent).join('/');
     const params = new URLSearchParams(route.query);
     if (!s || s === ALL_SECTORS) params.delete('sector'); else params.set('sector', s);
+    const qs = params.toString();
+    navigate('#/' + rest + (qs ? '?' + qs : ''), { replace: true });
+  };
+  const setTableQuery = (q: string) => {
+    const rest = route.segments.map(encodeURIComponent).join('/');
+    const params = new URLSearchParams(route.query);
+    if (!q) params.delete('q'); else params.set('q', q);
     const qs = params.toString();
     navigate('#/' + rest + (qs ? '?' + qs : ''), { replace: true });
   };
@@ -309,6 +345,7 @@ export default function App() {
             isMobile={isMobile}
             isTight={media.isTight}
             onOpenNav={() => setNavOpen(true)}
+            onOpenSearch={() => setSearch('jump')}
           />
 
           <div style={{ padding: isMobile ? '16px 14px 64px' : '22px 24px 72px', maxWidth: 1200, width: '100%', margin: '0 auto', minWidth: 0 }}>
@@ -370,21 +407,35 @@ export default function App() {
                 media={media}
               />
             )}
-            {tab === 'chart' && <ChartsTab D={D} chartSym={chartSym} setChartSym={setChartSym} watch={watch} media={media} />}
+            {tab === 'chart' && <ChartsTab D={D} chartSym={chartSym} watch={watch} media={media} onPickSymbol={() => setSearch('chart')} />}
             {tab === 'sectors' && <SectorsTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} />}
             {tab === 'highs' && (
               <HighsTab
                 D={D} highMode={highMode} setHighMode={setHighMode}
                 sectorFilter={sectorFilter} setSectorFilter={setSectorFilter}
+                query={tableQuery} setQuery={setTableQuery}
                 watch={watch} toggle={toggle} onOpen={setDrawerSym}
               />
             )}
             {tab === 'draw' && <DrawdownTab D={D} route={route} navigate={navigate} watch={watch} toggle={toggle} onOpen={setDrawerSym} media={media} />}
-            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} media={media} />}
+            {tab === 'watch' && <WatchTab D={D} watch={watch} toggle={toggle} onOpen={setDrawerSym} profile={profile} media={media} onSearch={() => setSearch('jump')} query={tableQuery} setQuery={setTableQuery} />}
             {tab === 'news' && <NewsTab D={D} route={route} navigate={navigate} watch={watch} />}
           </div>
         </main>
       </div>
+
+      {search && (
+        <SymbolSearch
+          D={D}
+          mode={search}
+          watch={watch}
+          toggle={toggle}
+          onOpenStock={sym => { setSearch(null); setDrawerSym(sym); }}
+          onOpenChart={sym => { setSearch(null); setChartSym(sym); }}
+          onClose={() => setSearch(null)}
+          media={media}
+        />
+      )}
 
       {drawerStock && (
         <StockDrawer

@@ -1,15 +1,19 @@
 import { T } from '../../theme';
 import { StockTable } from '../StockTable';
+import { FilterBox } from '../FilterBox';
 import type { MarketData, Stock } from '../../lib/data';
+import { filterStocks } from '../../lib/search';
 
 export type HighMode = 'w52' | 'ath' | 'wk';
 
-export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilter, watch, toggle, onOpen }: {
+export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilter, query, setQuery, watch, toggle, onOpen }: {
   D: MarketData;
   highMode: HighMode;
   setHighMode: (m: HighMode) => void;
   sectorFilter: string;
   setSectorFilter: (s: string) => void;
+  query: string;
+  setQuery: (q: string) => void;
   watch: Record<string, true>;
   toggle: (sym: string) => void;
   onOpen: (sym: string) => void;
@@ -30,7 +34,10 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
   const perSector: Record<string, number> = {};
   pool.forEach(s => { perSector[s.sector] = (perSector[s.sector] || 0) + 1; });
   const sectorOptions = ['All sectors', ...D.sectors.map(s => s.name)];
-  const rows = pool.filter(s => sectorFilter === 'All sectors' || s.sector === sectorFilter);
+  const inSector = pool.filter(s => sectorFilter === 'All sectors' || s.sector === sectorFilter);
+  // Filtering narrows what this tab already holds — only stocks at a high. The
+  // palette is still the only way to reach a symbol that is not making one.
+  const rows = filterStocks(inSector, query);
 
   return (
     <div style={{ marginTop: 18 }}>
@@ -45,11 +52,14 @@ export function HighsTab({ D, highMode, setHighMode, sectorFilter, setSectorFilt
             );
           })}
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <FilterBox value={query} onChange={setQuery} count={rows.length} total={inSector.length} />
         <select value={sectorFilter} onChange={e => setSectorFilter(e.target.value)} style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 500, padding: '8px 12px', borderRadius: 8, border: '1px solid ' + T.border, background: T.card, color: T.text }}>
           {sectorOptions.map(o => (
             <option key={o} value={o}>{o === 'All sectors' ? o + ' · ' + pool.length : o + ' · ' + (perSector[o] || 0)}</option>
           ))}
         </select>
+        </div>
       </div>
 
       <div style={{ marginTop: 16 }}>

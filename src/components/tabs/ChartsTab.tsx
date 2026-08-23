@@ -12,17 +12,28 @@ function fmtAxisDate(iso: string): string {
   return d.getUTCDate().toString().padStart(2, '0') + ' ' + d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
 }
 
-export function ChartsTab({ D, chartSym, setChartSym, watch, media }: {
+export function ChartsTab({ D, chartSym, watch, media, onPickSymbol }: {
   D: MarketData;
   chartSym: string;
-  setChartSym: (s: string) => void;
   watch: Record<string, true>;
   media: Media;
+  /** Opens the palette in chart mode — any symbol, not just indices and stars. */
+  onPickSymbol: () => void;
 }) {
   const idxSyms = D.indices.map(ix => ({ key: ix.name, label: ix.name, sub: 'Index', last: ix.value, vol: ix.name === 'INDIA VIX' ? 4 : 0.95 }));
   const watchSyms = D.stocks.filter(s => watch[s.sym]).map(s => ({ key: s.sym, label: s.sym, sub: s.sector, last: s.price, vol: 2.2 }));
   const allSyms = [...idxSyms, ...watchSyms];
-  const sel = allSyms.find(x => x.key === chartSym) || allSyms[0];
+
+  // The picker can now reach the whole universe, so resolve the routed symbol
+  // against every stock before giving up. Without this, #/charts/TATAPOWER
+  // silently charted the first index — the wrong instrument under the right
+  // heading.
+  const routed = allSyms.some(x => x.key === chartSym)
+    ? null
+    : D.stocks.find(s => s.sym === chartSym);
+  const sel = routed
+    ? { key: routed.sym, label: routed.sym, sub: routed.sector, last: routed.price, vol: 2.2 }
+    : allSyms.find(x => x.key === chartSym) || allSyms[0];
 
   const [real, setReal] = useState<{ sym: string; candles: ApiCandle[] } | null>(null);
   useEffect(() => {
@@ -68,9 +79,18 @@ export function ChartsTab({ D, chartSym, setChartSym, watch, media }: {
     <div style={{ marginTop: 18 }}>
       <Card style={{ padding: media.isMobile ? '14px 14px' : '16px 20px', display: 'flex', alignItems: media.isMobile ? 'stretch' : 'center', justifyContent: 'space-between', gap: media.isMobile ? 12 : 20, flexWrap: 'wrap', flexDirection: media.isMobile ? 'column' : 'row' }}>
         <div style={{ display: 'flex', alignItems: media.isMobile ? 'stretch' : 'center', gap: media.isMobile ? 10 : 16, flexDirection: media.isMobile ? 'column' : 'row', minWidth: 0 }}>
-          <select value={sel.key} onChange={e => setChartSym(e.target.value)} style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 700, padding: '8px 12px', borderRadius: 10, border: '1px solid ' + T.border, background: T.cardAlt, color: T.ink, maxWidth: '100%' }}>
-            {allSyms.map(o => <option key={o.key} value={o.key}>{o.key}</option>)}
-          </select>
+          {/* Was a <select> over indices plus starred stocks only, which made
+              every other symbol unchartable. It opens the palette instead. */}
+          <button
+            onClick={onPickSymbol}
+            title="Change symbol"
+            style={{ appearance: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 9, fontFamily: T.sans, fontSize: 15, fontWeight: 700, padding: '8px 10px 8px 12px', borderRadius: 10, border: '1px solid ' + T.border, background: T.cardAlt, color: T.ink, maxWidth: '100%', minWidth: 0 }}
+          >
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sel.key}</span>
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={T.faint} strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}>
+              <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+            </svg>
+          </button>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
             <Mono size={media.isMobile ? 19 : 21} weight={600}>{sel.last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Mono>
             <Mono size={14} weight={600} color={dirColor(dayChg)}>{(dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%'}</Mono>

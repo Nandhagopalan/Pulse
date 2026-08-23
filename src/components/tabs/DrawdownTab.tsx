@@ -8,6 +8,8 @@ import { fmtPct, fmtPrice } from '../../lib/format';
 import { useSort, sortLabel } from '../../lib/sort';
 import type { SortSpec } from '../../lib/sort';
 import { useQueryParam } from '../../lib/router';
+import { filterStocks } from '../../lib/search';
+import { FilterBox } from '../FilterBox';
 import type { Route } from '../../lib/router';
 import type { Media } from '../../lib/useMedia';
 
@@ -68,6 +70,7 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen, media }
 }) {
   const [sector, setSectorParam] = useQueryParam(route, navigate, 'sector', ALL);
   const [bucketParam, setBucketParam] = useQueryParam(route, navigate, 'bucket', '');
+  const [q, setQ] = useQueryParam(route, navigate, 'q', '');
   const bucket = BUCKETS.some(b => b.key === bucketParam) ? bucketParam : null;
   const setSector = (s: string) => setSectorParam(s);
   const setBucket = (b: string | null) => setBucketParam(b || '');
@@ -99,16 +102,20 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen, media }
   }, [D.stocks]);
   const maxAvg = Math.max(...sectors.map(s => s.avg), 1);
 
-  const filtered = useMemo(
+  const inBucket = useMemo(
     () => bucket ? inSector.filter(s => ddBucket(s.distATH).key === bucket) : inSector,
     [inSector, bucket],
   );
+  // The text filter applies last, so the distribution cards above still
+  // describe the sector and bucket you picked rather than what you typed.
+  const filtered = useMemo(() => filterStocks(inBucket, q), [inBucket, q]);
   const { sorted, sort, onSort } = useSort(filtered, SPECS, { key: 'distATH', dir: 'desc' });
 
   const activeBucket = BUCKETS.find(b => b.key === bucket);
   const filterNote = [
     sector === ALL ? null : sector,
     activeBucket ? activeBucket.label : null,
+    q ? '"' + q + '"' : null,
   ].filter(Boolean).join(' · ');
 
   return (
@@ -151,9 +158,18 @@ export function DrawdownTab({ D, route, navigate, watch, toggle, onOpen, media }
         })}
 
         <div style={{ flex: 1 }} />
-        {(sector !== ALL || bucket) && (
+
+        <FilterBox
+          value={q}
+          onChange={setQ}
+          count={filtered.length}
+          total={inBucket.length}
+          width={media.isMobile ? 200 : 200}
+        />
+
+        {(sector !== ALL || bucket || q) && (
           <button
-            onClick={() => { setSector(ALL); setBucket(null); }}
+            onClick={() => { setSector(ALL); setBucket(null); setQ(''); }}
             style={{ appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.navy }}
           >
             Clear filters
