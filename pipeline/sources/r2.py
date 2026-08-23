@@ -17,7 +17,7 @@ import duckdb
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
-from .config import config
+from ..config import config
 
 
 @functools.lru_cache(maxsize=1)

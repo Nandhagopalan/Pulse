@@ -19,16 +19,15 @@ produce comparable numbers while the migration is in flight.
 from __future__ import annotations
 
 import warnings
-
 from datetime import date as Date
 from typing import Dict, List, Optional
 
 import numpy as np
 
-from . import corporate_actions as ca
-from . import nse, r2
-from .config import CURATED_DAILY, CURATED_INDEX, s3_uri
-from .reference import CONSTITUENTS_KEY
+from ..config import CURATED_DAILY, CURATED_INDEX, s3_uri
+from ..ingest import corporate_actions as ca
+from ..ingest.reference import CONSTITUENTS_KEY
+from ..sources import nse, r2
 
 # Sessions pulled into memory. Needs HIST + 252 so every point in the breadth
 # history has a full 52-week lookback, and >= CANDLES for the chart payload.
@@ -44,10 +43,11 @@ def _uris():
     modules are loaded, so constants captured at import time would always point
     at R2 even when the caller asked for the local mirror.
     """
-    from . import backfill
-    local = backfill.LOCAL_ROOT is not None and not backfill.USE_R2
-    if local:
-        root = backfill.LOCAL_ROOT
+    from ..ingest import backfill
+    # Bound directly rather than via an `local = ... is not None` flag, so the
+    # None-check narrows the type for the reader and the checker alike.
+    root = backfill.LOCAL_ROOT
+    if root is not None and not backfill.USE_R2:
         return (str(root / CURATED_DAILY / "*" / "data.parquet"),
                 str(root / CURATED_INDEX / "*" / "data.parquet"),
                 str(root / ca.ACTIONS_KEY),
@@ -286,7 +286,6 @@ def compute(con=None) -> dict:
         with np.errstate(invalid="ignore"), warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows are delisted symbols
             hi52_last = np.nanmax(high[:, lo_t:last + 1], axis=1)
-            lo52_last = np.nanmin(low[:, lo_t:last + 1], axis=1)
 
         bench = None
         for name in ("NIFTY 500", "NIFTY 50"):
@@ -349,14 +348,18 @@ def compute(con=None) -> dict:
         sectors = _sector_scores(stocks)
         candles = _candle_payload(w, active)
 
-        pct = lambda arr, j: int(round(arr[j] / agg["counted"][j] * 100)) if agg["counted"][j] else 0  # noqa: E731
+        # int() is redundant today — round() returns a Python int for every numpy
+        # dtype here — but this value is JSON-serialized into Postgres, and numpy
+        # scalars are not serializable. Keeping the cast makes that guarantee
+        # explicit rather than inherited from round()'s return type.
+        pct = lambda arr, j: int(round(arr[j] / agg["counted"][j] * 100)) if agg["counted"][j] else 0  # noqa: E731, RUF046
         tail = lambda arr, n: [int(x) for x in arr[HIST - min(n, HIST):]]  # noqa: E731
         j = HIST - 1
         hist_dates = [str(d) for d in dates[hist_start:]]
 
         breadth = {
             "date": latest,
-            "universe": int(len(active)),
+            "universe": len(active),
             "advances": int(agg["advances"][j]),
             "declines": int(agg["declines"][j]),
             "unchanged": int(agg["unchanged"][j]),
@@ -376,7 +379,7 @@ def compute(con=None) -> dict:
                 "newHighs": tail(agg["newHighs"], 45), "newLows": tail(agg["newLows"], 45),
                 "up20": tail(agg["up20"], 45), "up30": tail(agg["up30"], 45),
                 "up4vol": tail(agg["volUp4"], 45), "down4vol": tail(agg["volDn4"], 45),
-                "netHL": [a - b for a, b in zip(tail(agg["newHighs"], 45), tail(agg["newLows"], 45))],
+                "netHL": [a - b for a, b in zip(tail(agg["newHighs"], 45), tail(agg["newLows"], 45), strict=True)],
             },
             "dates": hist_dates,
         }

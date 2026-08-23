@@ -13,8 +13,8 @@ from typing import Dict, List
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from . import nse, r2
-from .config import CURATED_INSTRUMENTS, s3_uri
+from ..config import CURATED_INSTRUMENTS, s3_uri
+from ..sources import nse, r2
 
 INDEX_LISTS: Dict[str, str] = {
     "NIFTY 50": "/content/indices/ind_nifty50list.csv",

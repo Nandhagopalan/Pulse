@@ -24,7 +24,7 @@ from typing import Dict, Iterator, List, Optional
 
 import requests
 
-from .config import config
+from ..config import config
 
 ARCHIVES = "https://nsearchives.nseindia.com"
 
@@ -210,7 +210,9 @@ def _rows(text: str) -> Iterator[Dict[str, str]]:
     for row in reader:
         if not row or not any(c.strip() for c in row):
             continue
-        yield dict(zip(header, row))
+        # strict=False on purpose: NSE has shipped rows with a trailing empty
+        # field, and one ragged row must not sink the night's ingest.
+        yield dict(zip(header, row, strict=False))
 
 
 def parse_bhavcopy(blob: bytes, d: date) -> List[dict]:

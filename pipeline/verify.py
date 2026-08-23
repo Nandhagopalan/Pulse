@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from . import backfill, corporate_actions as ca, nse, r2
 from .config import s3_uri
+from .ingest import backfill
+from .ingest import corporate_actions as ca
+from .sources import nse, r2
 
 
 def _con():
@@ -115,7 +117,7 @@ def report(symbol: str, tail: int = 8) -> None:
         FROM bars_adj WHERE symbol = ?""", [symbol]
     ).fetchone()
     ath, ath_date, hi52, lo52, last_close, last_date = stats
-    print(f"\n  DERIVED (split-adjusted)")
+    print("\n  DERIVED (split-adjusted)")
     print(f"    last close      {last_close:>12,.2f}   on {last_date}")
     print(f"    all-time high   {ath:>12,.2f}   on {ath_date}")
     print(f"    % from ATH      {(last_close - ath) / ath * 100:>12,.2f}%")

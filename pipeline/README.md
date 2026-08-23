@@ -9,6 +9,47 @@ NSE archives ──► Cloudflare R2 ──► DuckDB ──► Supabase ──�
   (per session)  (~8M bars)        (one pass)  (a few MB)
 ```
 
+## Layout
+
+Packages follow the direction data flows, and the dependency graph is acyclic in
+that same order — nothing in `sources/` knows about `ingest/`, nothing in
+`ingest/` knows about `compute/`.
+
+```
+pipeline/
+├── __main__.py            `python -m pipeline` → cli.main()
+├── cli.py                 argument parsing and command dispatch
+├── config.py              env resolution, R2 key layout       (depends on nothing)
+├── sources/               the outside world
+│   ├── nse.py             exchange HTTP: archives, bhavcopy, cross-check feeds
+│   └── r2.py              object store (boto3) + DuckDB handle wired to it
+├── ingest/                outside world → curated Parquet, all idempotent
+│   ├── backfill.py        session bars, resumable, 2007 → today
+│   ├── reference.py       index constituents and the sector map
+│   └── corporate_actions.py  splits and bonuses → adjustment factors
+├── compute/               curated lake → the published snapshot
+│   ├── analytics.py       one DuckDB pass → breadth, sectors, per-symbol metrics
+│   └── publish.py         the only writer to Supabase
+├── jobs.py                chains; `eod` is what the nightly Action runs
+└── verify.py              audit one symbol end to end against a second NSE source
+```
+
+## Checks
+
+```bash
+uv sync --group dev     # ruff, mypy and stubs
+uv run ruff check pipeline/
+uv run mypy
+```
+
+Both run on every push and PR via
+[`.github/workflows/checks.yml`](../.github/workflows/checks.yml). Ruff's `BLE`
+rules are enabled deliberately: several modules catch broad exceptions on
+purpose — a failed sector refresh should not sink the night's ingest — and each
+carries a `# noqa: BLE001` saying why, so an *accidental* broad catch stands out.
+`UP` (pyupgrade) is off; modernizing the ~91 `typing.Optional`/`List`
+annotations to 3.12 syntax is a separate change from turning linting on.
+
 ## Why three stores
 
 | Store | Holds | Why not somewhere else |

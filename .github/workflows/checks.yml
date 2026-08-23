@@ -1,0 +1,31 @@
+name: Checks
+
+# The EOD workflow runs the pipeline but never checked it. This does — on every
+# push and PR, so a lint or type regression surfaces before the nightly job
+# meets it in production.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python:
+    name: pipeline (ruff + mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The dev group carries ruff and mypy; --locked keeps CI on the pinned set.
+      - run: uv sync --locked --group dev
+
+      - name: Ruff
+        run: uv run ruff check pipeline/
+
+      - name: mypy
+        run: uv run mypy

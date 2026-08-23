@@ -126,7 +126,7 @@ nowhere else. Neither the server nor the pipeline issues DDL; `supabase db push`
 applies them, and `supabase start` applies the same files to the local Docker
 stack, so dev and production are built from identical SQL.
 
-**Published by the pipeline** (`pipeline/publish.py`):
+**Published by the pipeline** (`pipeline/compute/publish.py`):
 
 | Table | Shape | Notes |
 | --- | --- | --- |

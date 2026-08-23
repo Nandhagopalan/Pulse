@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timezone
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import psycopg
 
-from .config import config
+from ..config import config
 
 BATCH = 500
 
@@ -122,7 +122,7 @@ def publish_flows(conn) -> None:
     datacenter IPs far more aggressively than the archive host, so a failure
     logs and returns rather than failing the nightly chain over a sidebar.
     """
-    from . import nse
+    from ..sources import nse
 
     try:
         rows = nse.fetch_www_json(FII_DII_PATH, referer=FII_DII_REFERER)
@@ -167,7 +167,7 @@ def _f(v) -> float:
         return 0.0
 
 
-def run(snap: dict = None) -> None:
+def run(snap: Optional[dict] = None) -> None:
     from . import analytics
 
     url = config.require_supabase()

@@ -25,8 +25,8 @@ from typing import Iterator, List, Optional, Tuple
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from . import nse, r2
-from .config import CURATED_DAILY, CURATED_INDEX, RAW_BHAV_PREFIX, RAW_INDEX_PREFIX, config, s3_uri
+from ..config import CURATED_DAILY, CURATED_INDEX, RAW_BHAV_PREFIX, RAW_INDEX_PREFIX, config, s3_uri
+from ..sources import nse, r2
 
 # Optional on-disk mirror of the object store, keyed identically to R2. Set via
 # `--local DIR`. It exists so the one expensive pass over NSE's archives can be

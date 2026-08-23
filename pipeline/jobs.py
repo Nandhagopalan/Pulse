@@ -13,7 +13,9 @@ from typing import Optional
 
 
 def eod(session: Optional[date] = None) -> None:
-    from . import analytics, backfill, corporate_actions as ca, publish, reference
+    from .compute import analytics, publish
+    from .ingest import backfill, reference
+    from .ingest import corporate_actions as ca
 
     today = session or date.today()
     year = today.year

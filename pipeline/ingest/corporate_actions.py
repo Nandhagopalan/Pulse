@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from . import nse, r2
-from .config import CURATED_ACTIONS, CURATED_DAILY, config, s3_uri
+from ..config import CURATED_ACTIONS, CURATED_DAILY, config, s3_uri
+from ..sources import nse, r2
 
 if TYPE_CHECKING:
     import duckdb
