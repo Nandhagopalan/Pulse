@@ -305,15 +305,21 @@ export function registerApiRoutes(router: Router): void {
     ]);
 
     /*
-     * Equity is recomputed from cash plus the open positions rather than served
-     * from the stored row. On the manual book a position can be added or closed
-     * between nightly runs, which moves cash immediately; the stored equity
-     * would stay stale until the next run and the tab would not add up.
+     * Equity, deployment and the open count are recomputed from cash plus the
+     * open positions rather than served from the stored row. On the manual book
+     * a position can be added or closed between nightly runs, which moves cash
+     * immediately; the stored row would stay stale until the next run and the
+     * tab would not add up.
+     *
+     * `n_open` belongs in here for the same reason as the other two, and was
+     * once left out of it: the book showed a position's cash and deployment
+     * while the count beside them still read zero.
      */
     const marked = positions.reduce(
       (sum, p) => sum + Number(p.qty) * Number(p.last_px ?? p.entry_px), 0);
     const liveState = latest
       ? { ...latest, equity: Number(latest.cash) + marked,
+          n_open: positions.length,
           deployed: Number(latest.cash) + marked > 0
             ? marked / (Number(latest.cash) + marked) : 0 }
       : null;
@@ -364,6 +370,13 @@ export function registerApiRoutes(router: Router): void {
     const stop = Number(body.stop);
     const qty = Math.floor(Number(body.qty));
     const entryDate = String(body.entry_date ?? '').slice(0, 10);
+    /*
+     * The mark is the operator's own, defaulting to the entry price.
+     * Without it a position added between nightly runs sits at its entry until
+     * the next one, reporting 0 P&L and 0R on a trade that has already moved —
+     * and on a backdated entry that is not a lag, it is wrong.
+     */
+    const lastPx = body.last_px == null || body.last_px === '' ? entryPx : Number(body.last_px);
 
     if (!symbol) return json(ctx, 400, { error: 'bad_symbol', message: 'Symbol is required.' });
     if (!Number.isFinite(entryPx) || entryPx <= 0) {
@@ -377,6 +390,9 @@ export function registerApiRoutes(router: Router): void {
     }
     if (!Number.isInteger(qty) || qty <= 0) {
       return json(ctx, 400, { error: 'bad_qty', message: 'Quantity must be a whole number above zero.' });
+    }
+    if (!Number.isFinite(lastPx) || lastPx <= 0) {
+      return json(ctx, 400, { error: 'bad_last', message: 'Last price must be above zero.' });
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) {
       return json(ctx, 400, { error: 'bad_date', message: 'Entry date must be YYYY-MM-DD.' });
@@ -427,18 +443,27 @@ export function registerApiRoutes(router: Router): void {
      * when the second failed. `deployed` is recomputed by the next nightly run,
      * and is NOT NULL, so it is left alone here.
      */
+    /*
+     * Sessions held, counted from the entry date rather than started at zero.
+     * `bars` is what the time stop is measured in, so a trade entered ten
+     * sessions ago and recorded today is ten sessions into its clock, not none
+     * of it — starting it at zero would hand a backdated position a fresh
+     * sixty-session lease. The nightly run increments it from here.
+     */
+    const bars = await sessionsBetween(db, entryDate, latest.date);
+
     await db.run(
       `WITH inserted AS (
          INSERT INTO strategy_positions
            (book_id, config_version, origin, symbol, sector, entry_date, entry_px, qty,
             init_stop, stop, r_per_share, last_px, bars, stale, status)
-         VALUES (?,?,'manual',?,?,?,?,?,?,?,?,?,0,0,'open')
+         VALUES (?,?,'manual',?,?,?,?,?,?,?,?,?,?,0,'open')
          RETURNING book_id
        )
        UPDATE strategy_state SET cash = cash - ?
         WHERE book_id = (SELECT book_id FROM inserted) AND date = ?`,
       [bookId, version, symbol, body.sector ?? null, entryDate, entryPx, qty,
-       stop, stop, entryPx - stop, entryPx, outlay, latest.date],
+       stop, stop, entryPx - stop, lastPx, bars, outlay, latest.date],
     );
     json(ctx, 201, { ok: true });
   }));
@@ -479,12 +504,22 @@ export function registerApiRoutes(router: Router): void {
     const pnl = proceeds - cost;
     const risk = pos.r_per_share * pos.qty;
 
-    // Closing and the cash credit go together, for the same reason as opening.
+    /*
+     * Closing and the cash credit go together, for the same reason as opening.
+     *
+     * `bars` is settled here too. It is counted by the nightly run, so a
+     * position opened and closed by hand between two runs would close having
+     * held zero sessions. The market's calendar knows better: count the
+     * sessions the trade actually spanned.
+     */
     await db.run(
       `WITH closed AS (
          UPDATE strategy_positions
             SET status='closed', exit_date=?, exit_px=?, exit_reason=?, pnl=?, r_multiple=?,
-                pending_exit=NULL
+                pending_exit=NULL,
+                bars = GREATEST(bars, (
+                  SELECT COUNT(DISTINCT b.date) FROM index_bars b
+                   WHERE b.date > strategy_positions.entry_date AND b.date <= ?))
           WHERE id = ?
           RETURNING book_id
        )
@@ -492,9 +527,131 @@ export function registerApiRoutes(router: Router): void {
         WHERE book_id = (SELECT book_id FROM closed)
           AND date = (SELECT MAX(date) FROM strategy_state WHERE book_id = (SELECT book_id FROM closed))`,
       [exitDate, exitPx, String(body.reason ?? 'manual').slice(0, 32), pnl,
-       risk > 0 ? pnl / risk : 0, id, proceeds],
+       risk > 0 ? pnl / risk : 0, exitDate, id, proceeds],
     );
     json(ctx, 200, { ok: true, pnl });
+  }));
+
+  /*
+   * Edit an open manual position.
+   *
+   * A manual book is a record of what the operator actually did, so it has to
+   * be correctable: a fat-fingered entry, a stop moved up during the day, a
+   * mark that is newer than last night's close. Everything the nightly run
+   * derives — P&L, R, held — follows from these five fields, which is why
+   * they are editable together rather than through five little endpoints.
+   *
+   * Omitted fields keep their current value, so the caller can send just the
+   * mark without restating the trade.
+   */
+  router.post('/api/strategy/positions/:id/edit', requireAuth(async ctx => {
+    const body = await readJson<Record<string, unknown>>(ctx);
+    if (!body) return json(ctx, 400, { error: 'bad_json' });
+    const db = await getDb();
+    if (!(await hasStrategyTables(db))) {
+      return json(ctx, 503, { error: 'not_deployed', message: STRATEGY_NOT_DEPLOYED });
+    }
+
+    const id = Number(ctx.params.id);
+    const pos = (await db.all<{
+      book_id: string; entry_date: string; entry_px: number; qty: number;
+      init_stop: number; stop: number; last_px: number | null;
+    }>(`SELECT book_id, entry_date, entry_px, qty, init_stop, stop, last_px
+          FROM strategy_positions WHERE id = ? AND status = 'open'`, [id]))[0];
+    if (!pos) return json(ctx, 404, { error: 'no_position', message: 'No open position with that id.' });
+
+    const guard = await requireManualBook(db, pos.book_id);
+    if (guard) return json(ctx, guard.status, guard.body);
+
+    const keep = (v: unknown, current: number) =>
+      v == null || v === '' ? current : Number(v);
+    const entryPx = keep(body.entry_px, pos.entry_px);
+    const stop = keep(body.stop, pos.stop);
+    const lastPx = keep(body.last_px, pos.last_px ?? pos.entry_px);
+    const qty = Math.floor(keep(body.qty, pos.qty));
+    const entryDate = String(body.entry_date ?? pos.entry_date).slice(0, 10);
+
+    if (!Number.isFinite(entryPx) || entryPx <= 0) {
+      return json(ctx, 400, { error: 'bad_entry', message: 'Entry price must be above zero.' });
+    }
+    if (!Number.isFinite(stop) || stop <= 0 || stop >= entryPx) {
+      return json(ctx, 400, {
+        error: 'bad_stop',
+        message: 'Stop must be above zero and below the entry price.',
+      });
+    }
+    if (!Number.isFinite(lastPx) || lastPx <= 0) {
+      return json(ctx, 400, { error: 'bad_last', message: 'Last price must be above zero.' });
+    }
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return json(ctx, 400, { error: 'bad_qty', message: 'Quantity must be a whole number above zero.' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entryDate)) {
+      return json(ctx, 400, { error: 'bad_date', message: 'Entry date must be YYYY-MM-DD.' });
+    }
+
+    /*
+     * Which stop defines R. Stops only ever ratchet up, so a stop moved *up* is
+     * a trailing stop and the R baseline it was sized against has to stay put,
+     * or every R multiple in the book silently rebases. A stop moved *down*
+     * cannot be a ratchet, so it is a correction to the original, and the
+     * baseline moves with it.
+     */
+    const initStop = stop < pos.init_stop ? stop : pos.init_stop;
+    const rPerShare = entryPx - initStop;
+    if (!(rPerShare > 0)) {
+      return json(ctx, 400, {
+        error: 'bad_stop',
+        message: `The initial stop (${pos.init_stop}) is not below the entry price. `
+          + 'Lower the stop to reset it.',
+      });
+    }
+
+    /*
+     * Cash follows the correction. The outlay was debited when the position was
+     * opened, so re-pricing or re-sizing it has to settle the difference on the
+     * newest state row — the same row the nightly run reads — otherwise the
+     * book counts shares it did not pay for.
+     */
+    const delta = (entryPx * qty - pos.entry_px * pos.qty) * (1 + BUY_CHARGES);
+    const latest = (await db.all<{ date: string; cash: number }>(
+      'SELECT date, cash FROM strategy_state WHERE book_id = ? ORDER BY date DESC LIMIT 1',
+      [pos.book_id]))[0];
+    if (!latest) {
+      return json(ctx, 409, {
+        error: 'no_session',
+        message: 'This book has no session yet.',
+      });
+    }
+    if (delta > 0 && Number(latest.cash) < delta) {
+      return json(ctx, 409, {
+        error: 'insufficient_cash',
+        message: `The change costs another ₹${Math.round(delta).toLocaleString('en-IN')} `
+          + `and the book holds ₹${Math.round(Number(latest.cash)).toLocaleString('en-IN')}.`,
+      });
+    }
+
+    /*
+     * Sessions held are re-derived, not preserved. On this book the entry date
+     * is the fact and `bars` is a count from it, so correcting the date has to
+     * move the count with it — and a position added before this was computed
+     * on insert is repaired by opening the dialog and saving.
+     */
+    const bars = await sessionsBetween(db, entryDate, latest.date);
+
+    await db.run(
+      `WITH edited AS (
+         UPDATE strategy_positions
+            SET entry_date=?, entry_px=?, qty=?, init_stop=?, stop=?, r_per_share=?,
+                last_px=?, bars=?
+          WHERE id = ?
+          RETURNING book_id
+       )
+       UPDATE strategy_state SET cash = cash - ?
+        WHERE book_id = (SELECT book_id FROM edited) AND date = ?`,
+      [entryDate, entryPx, qty, initStop, stop, rPerShare, lastPx, bars, id, delta, latest.date],
+    );
+    json(ctx, 200, { ok: true });
   }));
 
   /*
@@ -528,14 +685,105 @@ export function registerApiRoutes(router: Router): void {
       });
     }
 
-    // Wipe first, then re-base. The next pipeline run rebuilds from the new
-    // capital because load_state falls back to it when no session row exists.
-    await db.run('DELETE FROM strategy_positions');
-    await db.run('DELETE FROM strategy_signals');
-    await db.run('DELETE FROM strategy_state');
-    await db.run('DELETE FROM strategy_cashflows');
-    await db.run('UPDATE strategy_books SET capital = ?, started_on = NULL, updated_at = ?',
-                 [capital, new Date().toISOString().slice(0, 10)]);
+    const today = new Date().toISOString().slice(0, 10);
+
+    /*
+     * Wipe the book, keep the market.
+     *
+     * Deleting every strategy_state row is what a reset used to do, and it left
+     * the tab blank: equity, cash, deployed and the regime banner are all read
+     * from the newest row, so with no row at all the page reported a flat book
+     * in a bear market. Neither was true — the market had not changed, the book
+     * had merely lost the row that reported it.
+     *
+     * So the history goes and one row stays: the latest session, re-based to
+     * the new capital and carrying that session's regime, index and universe
+     * forward untouched. Those are facts about the market, not about the book.
+     * It also becomes the state the next nightly run resumes from, which is
+     * exactly a book that has just started flat.
+     *
+     * One statement, because a half-reset book is worse than either end of it.
+     * The delete and the insert see the same snapshot, so the seed rows are not
+     * visible to the delete that precedes them; the signals delete and the
+     * signals update touch disjoint rows by construction.
+     */
+    await db.run(
+      `WITH ctx AS (
+         SELECT DISTINCT ON (book_id)
+                book_id, date, regime_on, ew_index, ew_ma, universe_n
+           FROM strategy_state ORDER BY book_id, date DESC
+       ),
+       wipe_positions AS (DELETE FROM strategy_positions),
+       wipe_cashflows AS (DELETE FROM strategy_cashflows),
+       -- The seed row is re-based in place rather than deleted and re-inserted:
+       -- sub-statements share a snapshot, but the unique index does not, so an
+       -- insert in the same command still collides with the row the delete has
+       -- only just removed. Everything else about the row is a market fact and
+       -- is left exactly as the pipeline recorded it.
+       wipe_state AS (
+         DELETE FROM strategy_state s
+          WHERE NOT EXISTS (
+            SELECT 1 FROM ctx WHERE ctx.book_id = s.book_id AND ctx.date = s.date)
+       ),
+       seed AS (
+         UPDATE strategy_state s
+            SET equity = ?, cash = ?, deployed = 0, n_open = 0,
+                net_flow = 0, twr_factor = 1
+           FROM ctx
+          WHERE ctx.book_id = s.book_id AND ctx.date = s.date
+       ),
+       -- Candidates older than the seed session were never taken and never
+       -- will be; the seed session's own list is kept and re-sized below.
+       wipe_signals AS (
+         DELETE FROM strategy_signals s
+          WHERE NOT EXISTS (
+            SELECT 1 FROM ctx WHERE ctx.book_id = s.book_id AND ctx.date = s.date)
+       ),
+       /*
+        * Re-size the surviving candidates against the new capital. Quantity is
+        * a function of equity, so leaving it would advertise a Rs 24k risk on a
+        * book that can no longer carry it — and the prefill button on the
+        * manual book would hand the operator that number.
+        *
+        * This mirrors rules.position_size, which remains the definition: the
+        * stored quantity is for display and audit only, because book.advance
+        * re-derives it from the live equity at the moment of the fill. The next
+        * nightly run overwrites these rows outright.
+        */
+       resize AS (
+         UPDATE strategy_signals s
+            SET qty            = q.n,
+                position_value = q.n * s.ref_close,
+                risk_amount    = q.n * (s.ref_close - s.stop)
+           FROM (
+             SELECT s2.book_id, s2.date, s2.symbol,
+                    GREATEST(0, LEAST(
+                      floor(COALESCE((b.config::json->>'risk_pct')::float8, 0.006)
+                            * ? / (s2.ref_close - s2.stop)),
+                      floor(COALESCE((b.config::json->>'max_weight')::float8, 0.10)
+                            * ? / s2.ref_close),
+                      -- LEAST skips NULLs, so a missing turnover drops the
+                      -- liquidity cap rather than zeroing the position.
+                      floor(COALESCE((b.config::json->>'adv_cap')::float8, 0.05)
+                            * NULLIF(s2.turnover_20d, 0) / s2.ref_close),
+                      floor(? / (s2.ref_close
+                            * (1 + COALESCE((b.config::json->>'buy_charges')::float8, 0.00147))))
+                    ))::int AS n
+               FROM strategy_signals s2
+               JOIN strategy_books  b  ON b.id = s2.book_id
+               JOIN ctx ON ctx.book_id = s2.book_id AND ctx.date = s2.date
+              WHERE s2.ref_close > s2.stop
+           ) q
+          WHERE q.book_id = s.book_id AND q.date = s.date AND q.symbol = s.symbol
+       )
+       UPDATE strategy_books b
+          SET capital    = ?,
+              -- The book restarts at the seeded session, so that is when it
+              -- started. NULL here was a bug: nothing ever set it again.
+              started_on = COALESCE((SELECT date FROM ctx WHERE ctx.book_id = b.id), ?),
+              updated_at = ?`,
+      [capital, capital, capital, capital, capital, capital, today, today],
+    );
     json(ctx, 200, { ok: true, capital });
   }));
 
@@ -626,6 +874,22 @@ const STRATEGY_NOT_DEPLOYED =
 // Same figures the backtest deducts, so manual and rules P&L stay comparable.
 const BUY_CHARGES = 0.00147;
 const SELL_CHARGES = 0.00137;
+
+/**
+ * Trading sessions strictly after `from`, up to and including `to`.
+ *
+ * `index_bars` holds one row per index per session, so its distinct dates are
+ * the market's own calendar — weekends and holidays are absent because no bar
+ * was printed. A book's `strategy_state` rows are NOT a substitute: a book that
+ * started yesterday has one of them, and a position backdated a fortnight would
+ * report a single session held.
+ */
+async function sessionsBetween(db: Db, from: string, to: string): Promise<number> {
+  const row = (await db.all<{ n: number | string }>(
+    'SELECT COUNT(DISTINCT date) AS n FROM index_bars WHERE date > ? AND date <= ?',
+    [from, to]))[0];
+  return Number(row?.n ?? 0);
+}
 
 /** Refuse writes to anything but a manual book. Returns null when allowed. */
 async function requireManualBook(
