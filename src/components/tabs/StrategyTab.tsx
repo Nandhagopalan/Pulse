@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { T } from '../../theme';
 import { Card, Label, Mono, Tag, ghostBtn, inkBtn, inputStyle } from '../ui';
 import {
-  fetchStrategy, addStrategyPosition, closeStrategyPosition, resetStrategy,
+  fetchStrategy, addStrategyPosition, closeStrategyPosition, editStrategyPosition,
+  resetStrategy,
   type StrategySummary, type StrategyPosition,
 } from '../../lib/api';
 import type { MarketData, Stock } from '../../lib/data';
@@ -44,6 +45,7 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
   const [nonce, setNonce] = useState(0);
   const [adding, setAdding] = useState(false);
   const [closing, setClosing] = useState<StrategyPosition | null>(null);
+  const [editing, setEditing] = useState<StrategyPosition | null>(null);
   const [editingCapital, setEditingCapital] = useState(false);
   const reload = () => setNonce(n => n + 1);
 
@@ -258,8 +260,12 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
                             </Tag>
                           : <Tag color={T.up} bg={T.upSoft}>hold</Tag>}
                         {editable && (
-                          <button style={{ ...ghostBtn, padding: '3px 9px', fontSize: 11, marginLeft: 8 }}
-                            onClick={() => setClosing(p)}>Close</button>
+                          <>
+                            <button style={{ ...ghostBtn, padding: '3px 9px', fontSize: 11, marginLeft: 8 }}
+                              onClick={() => setEditing(p)}>Edit</button>
+                            <button style={{ ...ghostBtn, padding: '3px 9px', fontSize: 11, marginLeft: 6 }}
+                              onClick={() => setClosing(p)}>Close</button>
+                          </>
                         )}
                       </td>
                     </tr>
@@ -304,6 +310,12 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
         </Card>
       )}
 
+      {editing && (
+        <EditPosition pos={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => { setEditing(null); reload(); }} />
+      )}
+
       {closing && (
         <ClosePosition pos={closing} session={state?.date ?? ''}
           onDone={() => { setClosing(null); reload(); }} />
@@ -326,6 +338,10 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
  * this book is to record what you actually did, not what the sizer preferred.
  * The suggestion is computed here rather than server-side so there is no second
  * copy of the sizing rules to drift from pipeline/compute/strategy/rules.py.
+ *
+ * The last price is part of the entry for the same reason: a hand-added trade
+ * is usually already running, and marking it at its entry until the next
+ * nightly run would report a flat P&L on a position that is not flat.
  */
 function AddPosition({ book, config, equity, session, signals, stocks, onDone }: {
   book: string;
@@ -340,6 +356,7 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
   const [entry, setEntry] = useState('');
   const [stop, setStop] = useState('');
   const [qty, setQty] = useState('');
+  const [last, setLast] = useState('');
   const [date, setDate] = useState(session);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -353,10 +370,21 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
     : 0;
   const atRisk = Number(qty) > 0 && e > st ? Number(qty) * (e - st) : 0;
 
+  /*
+   * The trade as it stands right now, not as it was entered. A position taken
+   * a fortnight ago is already up or down, and typing the mark in here is what
+   * makes the P&L and R in the table below true the moment it is added, rather
+   * than after the next nightly run.
+   */
+  const lx = Number(last) > 0 ? Number(last) : e;
+  const q = Math.floor(Number(qty));
+  const openPnl = q > 0 && e > 0 ? (lx - e) * q : 0;
+  const rNow = e > st && st > 0 ? (lx - e) / (e - st) : 0;
+
   // Picking a name the engine flagged fills the row from its own figures.
   const prefill = (s: StrategySummary['signals'][number]) => {
     setSym(s.symbol); setEntry(String(s.ref_close));
-    setStop(String(s.stop)); setQty(String(s.qty));
+    setStop(String(s.stop)); setQty(String(s.qty)); setLast(String(s.ref_close));
   };
 
   const picked = stocks.find(x => x.sym === sym.trim().toUpperCase());
@@ -365,7 +393,7 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
     setBusy(true); setErr(null);
     addStrategyPosition({
       book, symbol: sym.trim().toUpperCase(), entry_date: date,
-      entry_px: e, stop: st, qty: Math.floor(Number(qty)),
+      entry_px: e, stop: st, qty: q, last_px: lx,
     })
       .then(onDone)
       .catch(x => { setBusy(false); setErr(x?.body?.message ?? 'Could not add the position.'); });
@@ -398,19 +426,26 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
               setSym(v);
               const hit = stocks.find(x => x.sym === v);
               if (hit && !entry) setEntry(String(hit.price));
+              if (hit && !last) setLast(String(hit.price));
             }} />
           <datalist id="pulse-symbols">
             {stocks.map(x => <option key={x.sym} value={x.sym}>{x.sector}</option>)}
           </datalist>
         </div>
         <div style={cell}><Label>Entry date</Label>
-          <input style={field} value={date} onChange={ev => setDate(ev.target.value)} placeholder="YYYY-MM-DD" /></div>
+          {/* A real picker: a manual entry is usually backdated, and typing
+              ISO dates from memory is where the wrong ones come from. */}
+          <input style={field} type="date" value={date}
+            onChange={ev => setDate(ev.target.value)} /></div>
         <div style={cell}><Label>Entry price</Label>
           <input style={field} value={entry} onChange={ev => setEntry(ev.target.value)} inputMode="decimal" /></div>
         <div style={cell}><Label>Stop</Label>
           <input style={field} value={stop} onChange={ev => setStop(ev.target.value)} inputMode="decimal" /></div>
         <div style={cell}><Label>Quantity</Label>
           <input style={field} value={qty} onChange={ev => setQty(ev.target.value)} inputMode="numeric" /></div>
+        <div style={cell}><Label>Last price</Label>
+          <input style={field} value={last} onChange={ev => setLast(ev.target.value)}
+            inputMode="decimal" placeholder={entry || 'mark'} /></div>
       </div>
       {picked && (
         <div style={{ marginTop: 8, fontSize: 12, color: T.muted }}>
@@ -418,6 +453,8 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
           {' '}· {picked.chg1d >= 0 ? '+' : ''}{picked.chg1d.toFixed(2)}% today
           <button style={{ ...ghostBtn, padding: '2px 8px', fontSize: 11, marginLeft: 8 }}
             onClick={() => setEntry(String(picked.price))}>Use as entry</button>
+          <button style={{ ...ghostBtn, padding: '2px 8px', fontSize: 11, marginLeft: 6 }}
+            onClick={() => setLast(String(picked.price))}>Use as last</button>
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 11, flexWrap: 'wrap' }}>
@@ -433,10 +470,126 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
             {equity > 0 && ` · ${((atRisk / equity) * 100).toFixed(2)}% of book`}
           </span>
         )}
+        {q > 0 && e > 0 && lx !== e && (
+          <span style={{ fontSize: 12.5, color: T.muted }}>
+            Open P&amp;L <b style={{ color: openPnl >= 0 ? T.up : T.down }}>{rupees(openPnl)}</b>
+            <span style={{ color: T.faint }}> · {rNow.toFixed(2)}R</span>
+          </span>
+        )}
         <button style={{ ...inkBtn, padding: '6px 14px', fontSize: 12.5, marginLeft: 'auto' }}
           disabled={busy} onClick={submit}>{busy ? 'Adding…' : 'Add to my book'}</button>
       </div>
       {err && <div style={{ marginTop: 8, fontSize: 12.5, color: T.down }}>{err}</div>}
+    </div>
+  );
+}
+
+/*
+ * Correct an open position on the manual book.
+ *
+ * The rules book is a test and is never touched by hand; this one is a record
+ * of what the operator actually did, so it has to be correctable — a mistyped
+ * fill, a stop moved up during the session, a mark newer than last night's
+ * close. Everything derived from a position (P&L, R, held) comes from these
+ * five fields, so they are edited together and previewed here before saving.
+ */
+function EditPosition({ pos, onClose, onDone }: {
+  pos: StrategyPosition; onClose: () => void; onDone: () => void;
+}) {
+  const [entry, setEntry] = useState(String(pos.entry_px));
+  const [stop, setStop] = useState(String(pos.stop));
+  const [last, setLast] = useState(String(pos.last_px ?? pos.entry_px));
+  const [qty, setQty] = useState(String(pos.qty));
+  const [date, setDate] = useState(pos.entry_date);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const e = Number(entry);
+  const st = Number(stop);
+  const lx = Number(last);
+  const q = Math.floor(Number(qty));
+
+  /*
+   * Mirrors the server's rule so the preview cannot disagree with what is
+   * saved: stops only ratchet up, so a higher stop is a trail and R stays
+   * measured from the stop the position was sized against; a lower one cannot
+   * be a trail, so it is a correction and the baseline moves with it.
+   */
+  const resets = st < pos.init_stop;
+  const baseline = resets ? st : pos.init_stop;
+  const rPerShare = e - baseline;
+  const pnl = q > 0 ? (lx - e) * q : 0;
+  const r = rPerShare > 0 ? (lx - e) / rPerShare : 0;
+  const valid = e > 0 && st > 0 && st < e && lx > 0 && q > 0 && rPerShare > 0
+    && /^\d{4}-\d{2}-\d{2}$/.test(date);
+
+  const submit = () => {
+    setBusy(true); setErr(null);
+    editStrategyPosition(pos.id, {
+      entry_date: date, entry_px: e, stop: st, qty: q, last_px: lx,
+    })
+      .then(onDone)
+      .catch(x => { setBusy(false); setErr(x?.body?.message ?? 'Could not save the position.'); });
+  };
+
+  const field = { ...inputStyle, width: '100%', fontSize: 13 };
+  const cell = { display: 'flex', flexDirection: 'column' as const, gap: 4 };
+
+  return (
+    <div role="dialog" aria-label={`Edit ${pos.symbol}`}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(11,18,32,.35)', display: 'flex',
+               alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}
+      onClick={onClose}>
+      <div onClick={ev => ev.stopPropagation()}
+        style={{ background: T.card, borderRadius: 12, padding: 20, width: 460,
+                 maxWidth: '100%', boxShadow: T.shadowPop }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>Edit {pos.symbol}</div>
+        <div style={{ fontSize: 12.5, color: T.muted, margin: '4px 0 14px' }}>
+          Held {pos.bars} session{pos.bars === 1 ? '' : 's'} · entered {pos.entry_date}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          <div style={cell}><Label>Entry date</Label>
+            <input style={field} type="date" value={date}
+              onChange={ev => setDate(ev.target.value)} /></div>
+          <div style={cell}><Label>Entry price</Label>
+            <input style={field} value={entry} inputMode="decimal"
+              onChange={ev => setEntry(ev.target.value)} /></div>
+          <div style={cell}><Label>Quantity</Label>
+            <input style={field} value={qty} inputMode="numeric"
+              onChange={ev => setQty(ev.target.value)} /></div>
+          <div style={cell}><Label>Stop</Label>
+            <input style={field} value={stop} inputMode="decimal"
+              onChange={ev => setStop(ev.target.value)} /></div>
+          <div style={cell}><Label>Last price</Label>
+            <input style={field} value={last} inputMode="decimal"
+              onChange={ev => setLast(ev.target.value)} /></div>
+        </div>
+
+        <div style={{ margin: '13px 0 4px', fontSize: 13 }}>
+          P&amp;L <b style={{ color: pnl >= 0 ? T.up : T.down }}>{rupees(pnl)}</b>
+          <span style={{ color: T.faint }}>
+            {' · '}{r.toFixed(2)}R{rPerShare > 0 && ` · risk ${rupees(rPerShare * q)}`}
+          </span>
+        </div>
+        <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.5 }}>
+          {resets
+            ? `R is measured from ${st.toFixed(2)} — lowering the stop resets the baseline.`
+            : `R is measured from the initial stop ${pos.init_stop.toFixed(2)}, so a trailing `
+              + 'stop does not rebase past trades.'}
+          {date !== pos.entry_date
+            ? ' Sessions held are recounted from the new entry date.'
+            : ''}
+          {' '}The next nightly run overwrites the last price with the real close.
+        </div>
+
+        {err && <div style={{ fontSize: 12.5, color: T.down, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+          <button style={{ ...ghostBtn, padding: '6px 13px', fontSize: 12.5 }} onClick={onClose}>Cancel</button>
+          <button style={{ ...inkBtn, padding: '6px 14px', fontSize: 12.5,
+                           opacity: valid && !busy ? 1 : 0.5 }}
+            disabled={!valid || busy} onClick={submit}>{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -477,8 +630,8 @@ function ClosePosition({ pos, session, onDone }: {
             <input style={{ ...inputStyle, width: '100%', fontSize: 13 }} value={px}
               onChange={ev => setPx(ev.target.value)} inputMode="decimal" /></div>
           <div><Label>Exit date</Label>
-            <input style={{ ...inputStyle, width: '100%', fontSize: 13 }} value={date}
-              onChange={ev => setDate(ev.target.value)} placeholder="YYYY-MM-DD" /></div>
+            <input style={{ ...inputStyle, width: '100%', fontSize: 13 }} type="date" value={date}
+              min={pos.entry_date} onChange={ev => setDate(ev.target.value)} /></div>
         </div>
         <div style={{ margin: '12px 0', fontSize: 13 }}>
           Gross <b style={{ color: gross >= 0 ? T.up : T.down }}>{rupees(gross)}</b>

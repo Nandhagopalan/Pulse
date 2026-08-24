@@ -151,11 +151,22 @@ export interface StrategySummary {
 
 export interface NewPosition {
   book: string; symbol: string; entry_date: string; entry_px: number;
-  stop: number; qty: number; sector?: string | null;
+  stop: number; qty: number; last_px?: number; sector?: string | null;
+}
+
+/** Fields of an open manual position that can be corrected. All optional. */
+export interface PositionEdit {
+  entry_date?: string; entry_px?: number; stop?: number; qty?: number; last_px?: number;
 }
 
 export function addStrategyPosition(p: NewPosition): Promise<{ ok: true }> {
   return request('/api/strategy/positions', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(p),
+  });
+}
+
+export function editStrategyPosition(id: number, p: PositionEdit): Promise<{ ok: true }> {
+  return request(`/api/strategy/positions/${id}/edit`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(p),
   });
 }
