@@ -95,7 +95,8 @@ class DayResult:
 
 
 def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyConfig,
-            t: int, net_flow: float = 0.0, manual: bool = False) -> DayResult:
+            t: int, net_flow: float = 0.0, manual: bool = False,
+            prev_equity: Optional[float] = None) -> DayResult:
     """
     Move the book through session `t`. Mutates `state`; returns the day's row.
 
@@ -108,9 +109,24 @@ def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyCo
     Both modes share one function deliberately. A manual book that aged its
     positions differently from the rules book would make the comparison between
     them meaningless, and comparing them is the whole reason for running two.
+
+    `prev_equity` is the previous session's closing equity, as recorded. Pass it
+    whenever the book was reconstructed from storage: between two runs the API
+    can have added a position to a manual book, and the reconstruction then
+    already contains it. Re-deriving the base from that state values the new
+    holding at yesterday's close while the cash that bought it has gone, so the
+    whole entry-to-yesterday gain lands in the denominator and is never counted
+    as return — a backdated trade enters the book already up and the book never
+    says so. The recorded equity is the base that actually preceded the day; a
+    position arriving at cost is value-neutral against it, which leaves its
+    entire P&L in the day it appears. The backtest carries state in memory with
+    nothing able to mutate it, so it passes nothing and the two agree.
     """
     o, h, c = data.open, data.high, data.close
-    equity_start = state.cash + state.market_value(c[t - 1]) if t > 0 else state.cash
+    if prev_equity is not None:
+        equity_start = prev_equity
+    else:
+        equity_start = state.cash + state.market_value(c[t - 1]) if t > 0 else state.cash
 
     # ── 1. cash accrues, then flows settle ──────────────────────────────────
     state.cash *= 1.0 + (1.0 + cfg.cash_yield) ** (1.0 / 252.0) - 1.0

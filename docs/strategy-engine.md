@@ -259,9 +259,25 @@ side by side rather than changing one.
 by ₹10 lakh, and a CAGR read straight off the equity curve would book that as
 performance. Deposits and withdrawals go to `strategy_cashflows`, the day's flow
 is recorded on `strategy_state`, and reported returns are chain-linked across
-it — the daily factor is `(equity_end - flow) / equity_start`, compounded.
-That is a time-weighted return, and it is the only version comparable to the
-backtest, which has no flows at all.
+it — the daily factor is `equity_end / (equity_start + flow)`, compounded. The
+flow settles at the open, so it belongs in the base the day is measured against,
+not subtracted from the result. That is a time-weighted return, and it is the
+only version comparable to the backtest, which has no flows at all. Note what it
+is a return *on*: total equity, cash included. A book a third deployed whose
+holdings are up 6% has returned 2%, and the headline says 2%.
+
+**The base is the previous session's recorded equity, not a re-derived one.**
+On the rules book there is no difference — nothing touches it between runs, so
+rebuilding the state reproduces exactly where the day started. A manual book is
+not like that: the API adds and closes positions during the session, and by the
+time the nightly job rebuilds the book the new holding is in it while the cash
+that bought it is gone. Deriving the base from that state values the position at
+*yesterday's* close, which puts the entire entry-to-yesterday gain in the
+denominator, where it is never counted as return — a backdated trade enters the
+book already up and the book never says so. Against the recorded base, a
+position arriving at cost is value-neutral, so its whole P&L lands in the
+session it appears. This was live for four sessions and cost the manual book
+1.48 points of a 2.01% return.
 
 **Manual entries are marked.** A position opened by hand carries
 `origin = 'manual'`, so headline metrics can be reported for the rules-only

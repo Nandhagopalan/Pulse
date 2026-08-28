@@ -111,3 +111,33 @@ editing. The pipeline takes the same override:
 SUPABASE_DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
   uv run python -m pipeline publish
 ```
+
+### Filling the local database from production
+
+An empty local database serves 503s until something publishes into it. Running
+the pipeline is one way; copying what production already computed is the faster
+one:
+
+```bash
+scripts/sync-local-from-prod.sh          # prompts before overwriting
+scripts/sync-local-from-prod.sh --yes    # no prompt
+```
+
+It reads the hosted connection string from `PROD_DB_URL`, falling back to the
+first non-local `SUPABASE_DB_URL` in `.env.local` — including a commented-out
+one, since that file flips between the two databases by moving a `#`. The local
+endpoint comes from `supabase status`, so a remapped port in
+[../supabase/config.toml](../supabase/config.toml) needs no change here, and the
+script refuses to run if that endpoint is not local.
+
+`users`, `sessions`, `user_watchlist` and `user_prefs` are **not** copied.
+Production's sessions are cookies issued against another domain, so importing
+them would break local login rather than help it; your local account and its
+watchlist survive the sync untouched. Everything else is truncated and reloaded
+inside a single transaction — a failure leaves the database as it was — and the
+previous contents are dumped to `.local-backups/` (git-ignored) first. Row
+counts are compared against production afterwards, so a short copy fails loudly
+instead of passing quietly.
+
+The set of tables to replace is taken from the dump itself rather than hardcoded,
+so a table added by a later migration is picked up without editing the script.

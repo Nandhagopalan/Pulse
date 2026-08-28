@@ -137,8 +137,13 @@ def _advance_book(conn, cur, book_id: str, session: Optional[Date],
                                  before_session=None if manual else session_str)
         state.pending_entries = store.load_pending_signals(cur, book_id, col_of, session_str)
         flow = store.pending_cashflow(cur, book_id, session_str)
+        # The base for the day's return comes from the record, not from the
+        # state just rebuilt: on a manual book the two differ by whatever the
+        # operator did through the API since. `book.advance` has the reasoning.
+        prev_equity = store.load_prev_equity(cur, book_id, session_str)
 
-        day = book.advance(state, md, feats, cfg, t, net_flow=flow, manual=manual)
+        day = book.advance(state, md, feats, cfg, t, net_flow=flow, manual=manual,
+                           prev_equity=prev_equity)
         # Context for the regime banner; carried on the day rather than
         # recomputed by the API, so the UI shows what the decision actually used.
         day.ew_index = float(feats.ew_index[t])          # type: ignore[attr-defined]

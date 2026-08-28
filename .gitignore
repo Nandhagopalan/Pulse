@@ -34,3 +34,6 @@ __pycache__/
 *.pyc
 
 .playwright*
+
+# Local database snapshots taken by scripts/sync-local-from-prod.sh
+.local-backups/

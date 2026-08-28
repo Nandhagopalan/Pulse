@@ -148,6 +148,22 @@ def load_state(cur, book_id: str, col_of: Dict[str, int], capital: float,
     return state
 
 
+def load_prev_equity(cur, book_id: str, session: str) -> Optional[float]:
+    """
+    Closing equity of the last session recorded *before* `session`.
+
+    The base a session's return is measured against, and deliberately the stored
+    number rather than one re-derived from the book's current state: on a manual
+    book the API moves cash and positions between runs, so the reconstruction is
+    already past the point the day started from. See `book.advance`.
+    """
+    cur.execute("""SELECT equity FROM strategy_state
+                    WHERE book_id = %s AND date < %s ORDER BY date DESC LIMIT 1""",
+                (book_id, session))
+    row = cur.fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
 def load_pending_signals(cur, book_id: str, col_of: Dict[str, int],
                          session: str) -> List[Candidate]:
     """

@@ -137,6 +137,10 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
             <Mono size={19} color={(perf.totalReturn ?? 0) >= 0 ? T.up : T.down}>
               {perf.totalReturn == null ? '—' : pct(perf.totalReturn)}
             </Mono>
+            {/* Said out loud because the deployed figure sits two cells away:
+                this is on the whole book, so a third deployed and up 6% reads
+                as 2% here, not 6%. */}
+            <div style={{ fontSize: 10.5, color: T.faint }}>on equity, incl. cash</div>
           </div>
           <div>
             <Label>CAGR</Label>
