@@ -32,13 +32,25 @@ company later delisted, renamed or acquired.
 | Average deployment | 34.4% of capital |
 | ₹50 lakh becomes | ₹6.08 crore |
 
+> **Correction, August 2026.** These figures carry a look-ahead premium and
+> should not be planned against. The sector overlay reads industry labels that
+> existed for only 500 of 3,967 equities — today's NIFTY 500 — and the overlay
+> excludes what it cannot classify, so the rule silently encoded "hold only
+> companies that are in the NIFTY 500 in 2026". Rebuilding the labels to cover
+> 3,110 symbols and re-running the identical rules gives **12.84% CAGR**; the
+> same rules with the overlay off give **13.42% with a −15.02% drawdown**. The
+> gap between 15.80% and 12.84% over the training window is the look-ahead,
+> measured directly. Section 1.2 has the evidence and what follows from it.
+
 Checks that could have failed and did not:
 
 - **Null test.** Random entries through the identical engine return −0.023R per
   trade against the strategy's +0.353R. No lookahead is leaking through the
   machinery.
 - **Survivorship.** The universe is rebuilt each session from that session's
-  bhavcopy. Nothing reads a present-day list.
+  bhavcopy. ~~Nothing reads a present-day list.~~ **This claim was wrong.** The
+  universe filter reads no present-day list, but the *sector overlay* does, and
+  it is applied after the universe. See section 1.2.
 - **Walk-forward.** Parameters fixed: 7.2% (2008–12), 11.8% (2013–19), 22.7%
   (2020–26). Every period profitable, every drawdown inside the band.
 - **Parameter stability.** Position count and risk move results smoothly rather
@@ -49,10 +61,67 @@ Two things this rests on that are *not* proven:
 - **The sector cap is unproven.** Caps of 2/3/4/none give drawdowns of 14.1%,
   12.3%, 15.1%, 13.9% with CAGR flat throughout. That ordering is noise. The cap
   is kept for sound concentration reasons, not because the backtest justifies it.
-- **Sector labels are present-day.** Industry labels come from today's NIFTY 500
-  constituent file, the only sector map in the lake. The control (same universe,
-  no sector selection) says the selection effect is real, but expect live results
-  slightly below backtest.
+- **Sector labels are present-day.** ~~The control says the selection effect is
+  real, so expect live results slightly below backtest.~~ **This was too
+  generous.** The effect was largely artifact, and live results were far below
+  backtest, not slightly. Section 1.2.
+
+### 1.2 What the out-of-sample run found, August 2026
+
+Parameters were re-selected on data ending 2024-12-31 and applied untouched to
+2025 and 2026. Features over the truncated lake match features over the full
+lake row for row across all 4,441 training sessions, so no rule reads forward;
+the contamination was in the *labels*, not the machinery.
+
+| | 2025 | 2026 YTD |
+| --- | --- | --- |
+| the book, as configured | −3.46% | +6.20% |
+| NIFTY 50 | +10.05% | −7.54% |
+| broad basket, held only while regime ON | +5.06% | +5.60% |
+
+2025 was a bull market the book missed by 13 points. The regime filter was not
+at fault — simply holding the basket while the switch said *go* returned +5.06%.
+Nor was it the parameters: across 49 configurations only 8 were profitable in
+2025, and training CAGR correlated **−0.45** with 2025 return, so the settings
+that looked best over 17 years did worst. It was the overlay, which could reach
+only 500 of 3,967 names.
+
+The labels were then rebuilt (section 5.1) and the rule re-tested on 3,110
+symbols across 25 sectors:
+
+| Variant | Train CAGR | Train DD | Calmar | 2025 | 2026 YTD |
+| --- | --- | --- | --- | --- | --- |
+| overlay on, unlabeled excluded | 12.84% | −13.84% | 0.93 | +3.36% | +19.89% |
+| overlay on, unlabeled pass | 12.59% | −16.83% | 0.75 | +9.61% | +23.42% |
+| overlay top 50%, unlabeled pass | 13.11% | −15.64% | 0.84 | +14.39% | +26.43% |
+| **overlay off** | **13.42%** | −15.02% | 0.89 | **+19.16%** | +26.25% |
+
+Better data fixes most of the damage without touching a rule — 2025 goes from
+−3.46% to +3.36%. But the overlay still loses to switching it off, on training
+CAGR and on 2025, and ties on 2026. That is now a finding about the rule rather
+than about the data, because the data was fixed first.
+
+Note the first row: best Calmar, best training drawdown, worst holdout. Labels
+cover 96% of listed companies and 45% of delisted ones, so a rule that excludes
+the unlabeled flatters the past by declining to trade companies that later died.
+That asymmetry is why `require_sector_label` exists.
+
+Two defects were found on the way and are fixed in the engine, both defaulted
+off so no running book changed behaviour:
+
+- **ETFs were tradeable.** NSE lists fund units in the `EQ` series, so `series`
+  never separated them from companies; the overlay had been excluding them only
+  by accident, because a fund has no industry label. With the overlay off the
+  book opened six silver ETFs on one morning, sized as six independent
+  positions — 52% of the period's P&L on one commodity. `equity_only` and
+  `max_per_group` address the two halves of that.
+- **The reference figures are stale.** `tests/test_backtest_fidelity.py` pins
+  the numbers in the table above. They still hold for the shipped defaults, and
+  are expected to fail the moment the overlay is switched off — which is the
+  test doing its job. Re-baseline deliberately, in a commit that says so.
+
+Reproduce with `scripts/walkforward.py`, `scripts/overlay_recheck.py` and
+`scripts/label_gap.py`.
 
 ### 1.1 The cash condition
 
@@ -178,6 +247,8 @@ class StrategyConfig:
     top_n_turnover: int = 500
     min_price: float = 20.0
     min_history: int = 250
+    equity_only: bool = False         # ISIN INE = company, INF = fund unit
+    max_per_group: int = 0            # positions sharing a tracked underlying
     # regime
     regime_index_n: int = 200
     regime_ma: int = 100
@@ -187,6 +258,7 @@ class StrategyConfig:
     rs_lookback: int = 126
     rs_min_pct: float = 0.80
     sector_top_frac: float = 0.25     # 0 disables the sector overlay
+    require_sector_label: bool = True # False: unlabeled skips the sector test
     sector_lookback: int = 63
     max_per_sector: int = 3           # 0 = unlimited
     # exit
@@ -377,6 +449,44 @@ Storing `stop_pct` and `risk_amount` on the signal is deliberate: without them y
 cannot tell from the UI why one position is ₹1.9L and another ₹3.8L, and the
 sizing stops being checkable. `init_stop` is kept alongside the live `stop` so R
 multiples stay comparable after the stop has moved.
+
+### 5.1 Industry classification — `curated/instruments/industry.parquet`
+
+Built by `python -m pipeline industry`, keyed by **ISIN** rather than ticker so a
+company that changed symbol still resolves. Columns: `isin`, `scrip_code`,
+`bse_symbol`, `name`, `status`, `industry` (basic industry), `macro` (sector),
+`group` (the level above sector, NSE only) and `source`.
+
+Two sources, in this order, and the order is the point:
+
+1. **BSE scrip master** — Active, Delisted and Suspended. A label set covering
+   only survivors turns any filter built on it into a survivorship screen, and
+   BSE is the exchange that still knows the dead. 2,687 labels.
+2. **NSE**, via `getDetailedScripData`, for still-listed names BSE could not
+   label. NSE's own `/api/quote-equity` — the endpoint its quote page calls — is
+   refused at Akamai's edge for anything that is not a browser, which is why a
+   different endpoint is used. 423 labels.
+
+Both exchanges publish the same NIC-derived vocabulary, so the two merge without
+a mapping layer. The NIFTY 500 constituent file remains as a fallback for a lake
+that has not run the ingest yet, and the two vocabularies are **never mixed** —
+blending them would split one sector across two labels and corrupt the breadth
+counts.
+
+| | labelled | coverage |
+| --- | --- | --- |
+| lake equities with an ISIN | 3,002 / 3,719 | 81% |
+| still trading | 2,489 / 2,583 | 96% |
+| delisted | 513 / 1,136 | 45% |
+
+The last two rows are the reason `require_sector_label` exists. Coverage is far
+better for companies that survived, so a rule that excludes the unlabeled is a
+survivorship screen wearing a sector filter's clothes. Set the flag false and an
+unlabeled name skips the sector test instead of failing it, which errs toward
+the dead — the conservative direction.
+
+Refresh is a snapshot, overwritten in place like `constituents.parquet`, and
+resumable: rows already stored are not re-fetched unless `--refresh` is passed.
 
 ---
 
