@@ -52,6 +52,8 @@ class MarketData:
     raw_close: np.ndarray                # unadjusted, for the penny-stock floor
     is_eq: np.ndarray                    # [T x N] bool
     sector: Optional[np.ndarray] = None  # [N] str, may be None
+    is_equity: Optional[np.ndarray] = None  # [N] bool, False for fund units
+    group: Optional[np.ndarray] = None      # [N] str, the tracked underlying
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -75,6 +77,7 @@ class Features:
     tv20: np.ndarray          # 20-day median turnover, for the ADV cap
     sector_ok: np.ndarray     # [T x N] bool
     sector_id: np.ndarray     # [N] int32, -1 where unknown
+    group_id: np.ndarray      # [N] int32, -1 where the name stands alone
     ema_exit: Optional[np.ndarray] = None
     volmed: Optional[np.ndarray] = None
     contracted: Optional[np.ndarray] = None
@@ -135,6 +138,8 @@ def compute_features(data: MarketData, cfg: StrategyConfig) -> Features:
         & (data.raw_close >= cfg.min_price)
         & (nbars >= cfg.min_history)
     )
+    if cfg.equity_only and data.is_equity is not None:
+        universe &= data.is_equity[None, :]
 
     # ── cross-sectional momentum, ranked within the universe only ───────────
     ret = np.full((T, N), np.nan, np.float32)
@@ -146,12 +151,13 @@ def compute_features(data: MarketData, cfg: StrategyConfig) -> Features:
 
     ew_index, ew_ma, regime = _regime(data, rank_tv, cfg)
     sector_ok, sector_id = _sector(data, cfg)
+    group_id = _groups(data)
 
     feats = Features(
         universe=universe, regime=regime, ew_index=ew_index, ew_ma=ew_ma,
         prior_hi=prior_hi, sma50=sma50, sma150=sma150, sma200=sma200,
         s200_rising=s200_rising, atr=atr, rs_pct=rs_pct, tv20=tv20,
-        sector_ok=sector_ok, sector_id=sector_id,
+        sector_ok=sector_ok, sector_id=sector_id, group_id=group_id,
     )
 
     # Optional filters. Each was measured to *reduce* excess return, so they are
@@ -237,13 +243,38 @@ def _sector(data: MarketData, cfg: StrategyConfig):
     srank = W.pct_rank(comp, np.isfinite(comp))
     strong = srank >= (1.0 - cfg.sector_top_frac)
 
-    ok = np.zeros((T, N), bool)
+    # An unlabeled symbol starts out passing or failing according to the config:
+    # it cannot be *shown* to sit in a leading sector, but excluding it makes the
+    # rule depend on label coverage, and coverage is far better for companies
+    # that survived than for those that did not.
+    ok = np.zeros((T, N), bool) if cfg.require_sector_label else np.ones((T, N), bool)
     for gi, name in enumerate(names):
         cols = groups[name]
         ok[:, cols] = strong[:, gi][:, None]
-    # A symbol with no sector label cannot be shown to be in a leading sector,
-    # so the overlay excludes it rather than waving it through.
     return ok, sector_id
+
+
+def _groups(data: MarketData) -> np.ndarray:
+    """
+    Column -> tracked-underlying id, for the duplicate-exposure cap.
+
+    Only fund units are grouped. Two companies in the same industry are two
+    businesses and the sector cap already governs how many of them the book
+    holds; two silver ETFs from different AMCs are one position wearing two
+    tickers, and nothing else in the engine can tell them apart.
+
+    -1 means the name stands alone and the cap never applies to it.
+    """
+    N = len(data.symbols)
+    ids = np.full(N, -1, np.int32)
+    if data.group is None:
+        return ids
+    names = sorted({str(g) for g in data.group if g})
+    index = {g: i for i, g in enumerate(names)}
+    for i, g in enumerate(data.group):
+        if g:
+            ids[i] = index[str(g)]
+    return ids
 
 
 def entry_candidates(

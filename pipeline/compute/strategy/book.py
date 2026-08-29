@@ -69,7 +69,7 @@ class BookState:
     pending_exits: List[Tuple[int, str]] = field(default_factory=list)
     config_version: int = 1
     skipped: Dict[str, int] = field(default_factory=lambda: {
-        "slots": 0, "sector_cap": 0, "size": 0, "no_bar": 0})
+        "slots": 0, "sector_cap": 0, "size": 0, "no_bar": 0, "group_cap": 0})
 
     def market_value(self, close_row: np.ndarray) -> float:
         return sum(
@@ -163,6 +163,9 @@ def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyCo
         if cfg.max_per_sector > 0 and not _sector_room(state, feats, j, cfg):
             state.skipped["sector_cap"] += 1
             continue
+        if cfg.max_per_group > 0 and not _group_room(state, feats, j, cfg):
+            state.skipped["group_cap"] += 1
+            continue
         if not np.isfinite(o[t, j]):
             state.skipped["no_bar"] += 1
             continue
@@ -251,6 +254,15 @@ def _sector_room(state: BookState, feats: Features, col: int, cfg: StrategyConfi
         return True
     held = sum(1 for k in state.positions if feats.sector_id[k] == sid)
     return held < cfg.max_per_sector
+
+
+def _group_room(state: BookState, feats: Features, col: int, cfg: StrategyConfig) -> bool:
+    """Whether another wrapper on the same underlying may be opened."""
+    gid = feats.group_id[col]
+    if gid < 0:
+        return True
+    held = sum(1 for k in state.positions if feats.group_id[k] == gid)
+    return held < cfg.max_per_group
 
 
 def close_position(pos: Position, date, px: float, reason: str, cfg: StrategyConfig) -> None:

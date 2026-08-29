@@ -26,6 +26,17 @@ class StrategyConfig:
     top_n_turnover: int = 500
     min_price: float = 20.0            # unadjusted; a split-adjusted floor would
     min_history: int = 250             # wrongly exclude pre-split bars
+    # NSE lists ETF and fund units in the EQ series, so `series` does not
+    # separate them from companies. The distinction is in the ISIN: INE is an
+    # equity issue, INF a mutual-fund unit. Left off by default because the
+    # sector overlay already excludes them (a fund has no industry label), so a
+    # book running today behaves identically either way.
+    equity_only: bool = False
+    # Ceiling on positions sharing a tracked underlying. Silver is listed by
+    # seven AMCs; without this the book can hold seven wrappers of one bet, each
+    # sized as though it were an independent position, and the risk engine sees
+    # seven names rather than one. 0 disables the cap.
+    max_per_group: int = 0
 
     # ── regime: one on/off switch for the whole book ────────────────────────
     regime_index_n: int = 200          # names in the equal-weight index
@@ -39,6 +50,14 @@ class StrategyConfig:
     rs_lookback: int = 126
     rs_min_pct: float = 0.80           # top 20% cross-sectional momentum
     sector_top_frac: float = 0.25      # 0 disables the sector overlay
+    # What to do with a name that has no sector label. True excludes it, which
+    # is what the overlay has always done and is why it behaved as a coverage
+    # filter rather than a sector filter. Labels now cover 96% of listed names
+    # but only 45% of delisted ones, so excluding the unlabeled would screen the
+    # backtest toward survivors. False lets them through on momentum alone: they
+    # skip the sector test rather than failing it, which biases entries slightly
+    # toward the dead and is the conservative direction to err in.
+    require_sector_label: bool = True
     sector_lookback: int = 63
     max_per_sector: int = 3            # 0 = unlimited
     # measured to reduce excess return; kept as switches, defaulted off
