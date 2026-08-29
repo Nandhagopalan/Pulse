@@ -68,6 +68,7 @@ _FEATURE_FIELDS = (
     "trend_slope_window", "rs_lookback", "sector_top_frac", "sector_lookback",
     "atr_len", "adv_window", "ema_exit", "use_volume_filter", "volume_mult",
     "require_contraction", "equity_only", "require_sector_label",
+    "etf_as_sector", "weekly_ema_exit", "regime_band",
 )
 
 
