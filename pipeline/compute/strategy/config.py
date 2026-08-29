@@ -40,8 +40,49 @@ class StrategyConfig:
 
     # ── regime: one on/off switch for the whole book ────────────────────────
     regime_index_n: int = 200          # names in the equal-weight index
+    # Length of the average the regime index is judged against — this is the
+    # rollback delay, and shortening it is the intuitive fix that does not work.
+    # A 50-day average trained at -19% drawdown and delivered -34% out of
+    # sample, with a negative median held-out return: it sells the dip and
+    # rebuys higher. 100 has survived every independent search run against it.
     regime_ma: int = 100
     regime_exit: bool = True           # OFF also closes open positions
+    # Sessions the regime must stay OFF before the book is closed. 0 exits on the
+    # first OFF session, which is what has always happened and what makes the
+    # regime responsible for 63% of exits.
+    #
+    # MEASURED AND REJECTED. Waiting for confirmation reads as patience and is
+    # the opposite: at 2 sessions max drawdown went from -31.2% to -35.8%, at 5
+    # to -42.5%, at 8 to -48.1%. The week it waits is the week the market falls
+    # fastest. Kept as a switch only so the result stays reproducible — do not
+    # raise it without re-running scripts/experiments.py.
+    regime_exit_confirm: int = 0
+    # Sessions the regime must have been ON before entries resume. Deliberately
+    # asymmetric with the exit: leaving late was measured to deepen drawdowns
+    # badly, while arriving late only forgoes the first days of a rally.
+    #
+    # REJECTED for the shipped presets: cheap, but never measured to pay for
+    # itself either. It is the one regime knob that did no harm.
+    regime_entry_confirm: int = 0
+    # Hysteresis on the switch itself: ON needs the index this far *above* its
+    # average, OFF still triggers at the average. A single band separating the
+    # two thresholds is what stops a market hovering at its moving average from
+    # flipping the whole book on and off week after week.
+    #
+    # MEASURED AND REJECTED, and instructively so: it passed both training
+    # criteria and then lost 7-11 points of return out of sample. The whipsaw it
+    # removes is real and costs less than the trend it also removes. See
+    # scripts/whipsaw.py — this is the clearest overfit in the record.
+    regime_band: float = 0.0
+    # Sessions over which position size ramps back up after the regime turns ON.
+    # 0 deploys at full size immediately; a ramp buys in gradually while a
+    # recovery is still unproven.
+    #
+    # MEASURED AND REJECTED. Ramping over 10 sessions cut CAGR from 14.7% to
+    # 10.7% and barely moved drawdown (-31.2% to -26.8%); longer ramps were
+    # worse still. The first days of a regime turn carry a large share of the
+    # return, so arriving gradually forfeits most of what the switch is for.
+    ramp_sessions: int = 0
 
     # ── entry ───────────────────────────────────────────────────────────────
     breakout_lookback: int = 250       # 52-week closing high; 0 = all-time high
@@ -58,6 +99,13 @@ class StrategyConfig:
     # skip the sector test rather than failing it, which biases entries slightly
     # toward the dead and is the conservative direction to err in.
     require_sector_label: bool = True
+    # Let a sector or index ETF stand in as its own sector, so it is ranked and
+    # gated by the overlay exactly as an equity sector is. This is what makes
+    # "buy the sector when the sector is strong" expressible without a stock
+    # having to break out. Commodity, cash and debt wrappers are excluded from
+    # this: silver is not a sector, and letting it compete for a sector slot
+    # would be a different strategy under the same name.
+    etf_as_sector: bool = False
     sector_lookback: int = 63
     max_per_sector: int = 3            # 0 = unlimited
     # measured to reduce excess return; kept as switches, defaulted off
@@ -77,12 +125,20 @@ class StrategyConfig:
     # the stop the signal advertised the night before, so a gap-up entry simply
     # risks more per share and is sized smaller. True is what was validated.
     stop_from_fill: bool = True
-    time_stop: int = 60                # sessions (~3 months)
+    # Sessions before a position is closed regardless of how it is doing. None
+    # disables it: measured to truncate the winners this edge depends on, since
+    # the right tail keeps running well past three months. `balanced` keeps the
+    # 60-session stop it was validated with; `deployed` does not have one.
+    time_stop: Optional[int] = 60
     trail_atr: Optional[float] = None  # None = no trailing stop (tested, removed)
     trail_after_r: float = 1.5         # only consulted when trail_atr is set
     ema_exit: Optional[int] = None     # None = no moving-average exit
     ema_exit_min_hold: int = 5         # only consulted when ema_exit is set
     stale_exit: int = 5                # sessions with no bar => treat as delisted
+    # Trailing exit on a *weekly* close below this weekly EMA. Judged only on
+    # week-ending sessions, so an intra-week dip through the line is ignored —
+    # which is what separates a weekly stop from a noisy daily one. None = off.
+    weekly_ema_exit: Optional[int] = None
 
     # ── sizing ──────────────────────────────────────────────────────────────
     risk_pct: float = 0.0060           # of current book equity, per trade
@@ -140,7 +196,11 @@ class StrategyConfig:
 
 
 # ── Named presets: measured points on the risk/return frontier ──────────────
-# Full-period figures, 2008-01-16 to 2026-08-21, costs and 5% cash yield included.
+# The first three assume 5% on idle cash, which at ~18-34% deployment is a large
+# part of what they return; `deployed` assumes nothing on cash and earns its
+# return from the market instead. That difference matters more than any
+# parameter below, so read the two groups as different instruments rather than
+# as points on one curve.
 PRESETS: Dict[str, StrategyConfig] = {
     # 10.6% CAGR, -6.2% max drawdown, 0 losing years
     "conservative": StrategyConfig(name="conservative", max_positions=10,
@@ -150,6 +210,28 @@ PRESETS: Dict[str, StrategyConfig] = {
     # 19.7% CAGR, -19.5% max drawdown; near-full deployment while the regime is ON
     "aggressive": StrategyConfig(name="aggressive", max_positions=12,
                                  risk_pct=0.50, max_weight=1.0 / 12),
+    # 16.98% CAGR, -24.68% max drawdown, 5 losing years, 0% on idle cash.
+    # 23.06% CAGR since 2013 against the NIFTY MIDCAP 100's 16.48%, at half its
+    # drawdown; held out on 2024-2026 it returned 14.33%, 17.89% and 31.61%.
+    #
+    # This is rung B of a ladder, not the winner of a search. Across 324
+    # aggressive configurations the rank correlation between training CAGR and
+    # held-out CAGR was -0.152 — training rank does not predict out-of-sample
+    # rank — so the *shape* here is what survived independent validation
+    # (100-day regime, weekly EMA20 trail, no time stop) and the size is a
+    # declared risk appetite. 0.0055 is the same book inside a 20% drawdown
+    # ceiling; nothing else should move without re-running scripts/ladder.py.
+    #
+    # Deployment is capped by cash, not by the per-name limit: 12 slots at 12.5%
+    # is 150% of equity, so the book fills every slot the rules offer and stops
+    # when it runs out of money. Average exposure 52%, p95 100%.
+    "deployed": StrategyConfig(
+        name="deployed",
+        risk_pct=0.0080, max_positions=12, max_weight=0.125,
+        weekly_ema_exit=20, time_stop=None,
+        cash_yield=0.0, max_per_group=1,
+        sector_top_frac=0.0, max_per_sector=0, require_sector_label=False,
+    ),
 }
 
 DEFAULT = PRESETS["balanced"]

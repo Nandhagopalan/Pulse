@@ -215,3 +215,40 @@ def rank_desc_first(a: np.ndarray, w_valid: np.ndarray | None = None) -> np.ndar
         order = idx[np.argsort(-v[idx], kind="stable")]
         out[t, order] = np.arange(1, order.size + 1, dtype=np.float32)
     return out
+
+
+def weekly_ema(close: np.ndarray, dates: np.ndarray, span: int):
+    """
+    Weekly EMA, forward-filled to daily, plus a mask of week-closing sessions.
+
+    A weekly stop has to be judged on a *weekly* close, not on any day that
+    happens to dip below the line — that is the whole reason for using one. So
+    this returns two things: the EMA of weekly closes carried forward so it can
+    be read on any session, and the mask saying which sessions actually end a
+    week and may therefore trigger the exit.
+
+    No lookahead: the value at a week-ending session includes that week's close,
+    which is known at the moment the decision is taken, and nothing later.
+    """
+    weeks = dates.astype("datetime64[W]")
+    _uw, widx = np.unique(weeks, return_inverse=True)
+    T, N = close.shape
+    nw = int(widx.max()) + 1 if T else 0
+
+    # Last session of each week is the week's close.
+    last_row = np.full(nw, -1, np.int64)
+    for t in range(T):
+        last_row[widx[t]] = t
+    week_end = np.zeros(T, bool)
+    week_end[last_row[last_row >= 0]] = True
+
+    wk_close = close[last_row[last_row >= 0]]          # [nw x N]
+    wk = ema(wk_close, span)                            # EMA down the week axis
+
+    # Carry each week's value forward over the days that follow it.
+    out = np.full((T, N), np.nan, np.float32)
+    out[last_row[last_row >= 0]] = wk
+    for t in range(1, T):
+        if not week_end[t]:
+            out[t] = out[t - 1]
+    return out, week_end

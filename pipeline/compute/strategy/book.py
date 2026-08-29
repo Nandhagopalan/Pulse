@@ -69,7 +69,11 @@ class BookState:
     pending_exits: List[Tuple[int, str]] = field(default_factory=list)
     config_version: int = 1
     skipped: Dict[str, int] = field(default_factory=lambda: {
-        "slots": 0, "sector_cap": 0, "size": 0, "no_bar": 0, "group_cap": 0})
+        "slots": 0, "sector_cap": 0, "no_bar": 0, "group_cap": 0,
+        # Why a fill did not happen, when it was the size that stopped it.
+        # "cash" is a fully-invested book working as intended; "liquidity" is
+        # the market refusing the order and is the one that caps capacity.
+        "cash": 0, "liquidity": 0, "risk": 0, "weight": 0, "size": 0})
 
     def market_value(self, close_row: np.ndarray) -> float:
         return sum(
@@ -173,9 +177,18 @@ def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyCo
         stop = px - cfg.stop_atr * cand.atr if cfg.stop_from_fill else cand.stop
         if stop <= 0 or stop >= px:
             continue
-        qty = rules.position_size(equity_now, state.cash, px, stop, cand.turnover_20d, cfg)
+        # Size ramps back up over the sessions following a regime turn, so a
+        # recovery is bought into gradually rather than all at once on the first
+        # green day. `ramp_sessions` of 0 keeps the original behaviour.
+        scale = 1.0
+        if cfg.ramp_sessions > 0 and feats.on_run is not None:
+            scale = min(1.0, float(feats.on_run[t]) / cfg.ramp_sessions)
+        qty = rules.position_size(equity_now * scale, state.cash, px, stop,
+                                  cand.turnover_20d, cfg)
         if qty <= 0:
-            state.skipped["size"] += 1
+            lim = rules.size_limits(equity_now * scale, state.cash, px, stop,
+                                    cand.turnover_20d, cfg)
+            state.skipped[min(lim, key=lambda k: lim[k]) if lim else "size"] += 1
             continue
         state.cash -= px * qty * (1.0 + cfg.buy_charges)
         pos = Position(
@@ -203,9 +216,14 @@ def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyCo
         else:
             pos.stale += 1
 
+        wk = (float(feats.wk_ema[t, j]) if feats.wk_ema is not None
+              and np.isfinite(feats.wk_ema[t, j]) else None)
         reason = rules.exit_reason(
             close=float(close_t) if np.isfinite(close_t) else pos.last_px,
             stop=pos.stop, bars=pos.bars, regime_on=regime_on, stale=pos.stale,
+            off_run=int(feats.off_run[t]) if feats.off_run is not None else 0,
+            wk_value=wk,
+            is_week_end=bool(feats.week_end[t]) if feats.week_end is not None else False,
             cfg=cfg,
             ema_value=float(feats.ema_exit[t, j]) if feats.ema_exit is not None else None,
         )

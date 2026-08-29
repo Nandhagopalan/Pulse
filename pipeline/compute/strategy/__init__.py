@@ -30,7 +30,8 @@ from ...sources import r2
 from . import book, data, rules, store
 from .config import DEFAULT, StrategyConfig, preset
 
-__all__ = ["DEFAULT", "DEFAULT_CAPITAL", "MANUAL_BOOK", "StrategyConfig", "preset", "run"]
+__all__ = ["DEFAULT", "DEFAULT_CAPITAL", "MANUAL_BOOK", "StrategyConfig", "preset",
+           "retune", "run"]
 
 # Sessions loaded beyond what the rules strictly need. Cheap insurance: a short
 # window silently yields no signals rather than failing, which is the hardest
@@ -49,6 +50,62 @@ MANUAL_BOOK = "manual"
 # tab rewrites on reset. Two capitals, only one of them live. The profile field
 # is gone; `--capital` sets this deliberately, and the book owns it afterwards.
 DEFAULT_CAPITAL = 4_000_000.0
+
+
+def retune(book_id: str, preset_name: str, wipe: bool = False,
+           capital: Optional[float] = None, started_on: Optional[Date] = None) -> None:
+    """
+    Point one book at a different preset, optionally clearing what it traded.
+
+    Changing the rules under a running book leaves an equity curve that no
+    single strategy produced: the early trades were sized by one rule set and
+    the later ones by another, and no figure computed over the whole thing means
+    anything. `wipe` is the honest alternative — the book restarts flat, and the
+    record that follows is attributable end to end.
+
+    Scoped to one book by construction. The operator's manual book holds real
+    positions and must never be caught by a rules change it did not make.
+
+    The config itself is versioned rather than overwritten (see
+    `store.ensure_book`), so `strategy_config_log` keeps what was in force when.
+    """
+    import psycopg
+
+    cfg = preset(preset_name)
+    url = pipeline_config.require_supabase()
+    today = (started_on or Date.today()).isoformat()
+    with psycopg.connect(url) as conn, conn.cursor() as cur:
+        loaded = store.load_config(cur, book_id)
+        if loaded is None:
+            raise SystemExit(f"no book {book_id!r}; create it with `pipeline strategy` first")
+        old, _v, old_capital, fill_mode = loaded
+        if fill_mode == "manual":
+            raise SystemExit(f"{book_id!r} is the manual book — refusing to retune it")
+
+        seed = capital if capital is not None else old_capital
+        if wipe:
+            for table in ("strategy_positions", "strategy_signals",
+                          "strategy_state", "strategy_cashflows"):
+                cur.execute(f"DELETE FROM {table} WHERE book_id = %s", (book_id,))
+            cur.execute(
+                "UPDATE strategy_books SET capital = %s, started_on = %s WHERE id = %s",
+                (seed, today, book_id))
+
+        version = store.ensure_book(cur, book_id, cfg, seed, today,
+                                    note=f"retuned to preset {preset_name!r}",
+                                    fill_mode=fill_mode)
+        conn.commit()
+
+    print(f"[strategy] {book_id}: {old.name!r} -> {cfg.name!r}, config v{version}")
+    for f in ("risk_pct", "max_positions", "max_weight", "weekly_ema_exit",
+              "time_stop", "cash_yield", "max_per_group", "sector_top_frac",
+              "max_per_sector", "require_sector_label", "regime_ma", "stop_atr"):
+        a, b = getattr(old, f), getattr(cfg, f)
+        if a != b:
+            print(f"           {f}: {a} -> {b}")
+    if wipe:
+        print(f"[strategy] {book_id}: history cleared, restarting flat at "
+              f"Rs {seed:,.0f} from {today}")
 
 
 def run(book_ids: Optional[List[str]] = None, session: Optional[Date] = None,

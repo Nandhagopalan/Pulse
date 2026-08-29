@@ -36,6 +36,7 @@ EXIT_TIME = "time"
 EXIT_REGIME = "regime"
 EXIT_STALE = "stale"
 EXIT_EMA = "ema"
+EXIT_WEEKLY = "weekly"
 
 
 @dataclass
@@ -81,6 +82,10 @@ class Features:
     ema_exit: Optional[np.ndarray] = None
     volmed: Optional[np.ndarray] = None
     contracted: Optional[np.ndarray] = None
+    off_run: Optional[np.ndarray] = None    # [T] consecutive sessions regime OFF
+    on_run: Optional[np.ndarray] = None     # [T] consecutive sessions regime ON
+    wk_ema: Optional[np.ndarray] = None     # [T x N] weekly EMA, held forward
+    week_end: Optional[np.ndarray] = None   # [T] bool, session closes a week
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,7 @@ def compute_features(data: MarketData, cfg: StrategyConfig) -> Features:
     rs_pct = W.pct_rank(ret, universe)
 
     ew_index, ew_ma, regime = _regime(data, rank_tv, cfg)
+    off_run, on_run = _runs(regime)
     sector_ok, sector_id = _sector(data, cfg)
     group_id = _groups(data)
 
@@ -158,10 +164,14 @@ def compute_features(data: MarketData, cfg: StrategyConfig) -> Features:
         prior_hi=prior_hi, sma50=sma50, sma150=sma150, sma200=sma200,
         s200_rising=s200_rising, atr=atr, rs_pct=rs_pct, tv20=tv20,
         sector_ok=sector_ok, sector_id=sector_id, group_id=group_id,
+        off_run=off_run, on_run=on_run,
     )
 
     # Optional filters. Each was measured to *reduce* excess return, so they are
     # off by default and only computed when switched on.
+    if cfg.weekly_ema_exit:
+        feats.wk_ema, feats.week_end = W.weekly_ema(close, data.dates,
+                                                    cfg.weekly_ema_exit)
     if cfg.ema_exit:
         feats.ema_exit = W.ema(close, cfg.ema_exit)
     if cfg.use_volume_filter:
@@ -171,6 +181,19 @@ def compute_features(data: MarketData, cfg: StrategyConfig) -> Features:
             atrp = atr / close
         feats.contracted = atrp <= W.roll_median(atrp, 100)
     return feats
+
+
+def _runs(regime: np.ndarray):
+    """How many sessions the regime has been OFF, and ON, as of each row."""
+    T = len(regime)
+    off = np.zeros(T, np.int32)
+    on = np.zeros(T, np.int32)
+    for t in range(T):
+        if regime[t]:
+            on[t] = (on[t - 1] + 1) if t else 1
+        else:
+            off[t] = (off[t - 1] + 1) if t else 1
+    return off, on
 
 
 def _regime(data: MarketData, rank_tv: np.ndarray, cfg: StrategyConfig):
@@ -196,6 +219,21 @@ def _regime(data: MarketData, rank_tv: np.ndarray, cfg: StrategyConfig):
     ew_index = np.cumprod(1.0 + num / den)
 
     ew_ma = W.roll_mean(ew_index.reshape(-1, 1).astype(np.float32), cfg.regime_ma).ravel()
+    if cfg.regime_band > 0:
+        # Two thresholds, walked forward: switch ON only once the index clears
+        # the average by the band, switch OFF as soon as it loses the average.
+        # The state carries, so a market sitting on its average stays where it
+        # was rather than flipping with every crossing.
+        regime = np.zeros(T, bool)
+        on = False
+        hi = ew_ma * (1.0 + cfg.regime_band)
+        for t in range(T):
+            if not np.isfinite(ew_ma[t]):
+                regime[t] = False
+                continue
+            on = ew_index[t] > hi[t] if not on else ew_index[t] >= ew_ma[t]
+            regime[t] = on
+        return ew_index, ew_ma, regime
     with np.errstate(invalid="ignore"):
         regime = np.nan_to_num(ew_index > ew_ma, nan=False)
     return ew_index, ew_ma, regime.astype(bool)
@@ -212,11 +250,27 @@ def _sector(data: MarketData, cfg: StrategyConfig):
     """
     T, N = data.shape
     sector_id = np.full(N, -1, np.int32)
-    if data.sector is None:
+
+    # Effective sector label per column. Equities carry an industry; a fund unit
+    # carries the theme it tracks, and when `etf_as_sector` is set the
+    # sector-like themes become sectors in their own right. They are kept
+    # separate from the equity sectors rather than merged into them: a bank ETF
+    # and a basket of bank shares move together but are not the same instrument,
+    # and the overlay should be able to rank one above the other.
+    labels: List[Optional[str]] = (
+        [str(x) if x else None for x in data.sector] if data.sector is not None
+        else [None] * N
+    )
+    if cfg.etf_as_sector and data.group is not None:
+        from .data import SECTOR_LIKE
+        for i, g in enumerate(data.group):
+            if g and str(g) in SECTOR_LIKE:
+                labels[i] = f"ETF {g}"
+    if all(x is None for x in labels):
         return np.ones((T, N), bool), sector_id
 
     groups: Dict[str, List[int]] = {}
-    for i, name in enumerate(data.sector):
+    for i, name in enumerate(labels):
         if name:
             groups.setdefault(str(name), []).append(i)
     names = sorted(groups)
@@ -295,6 +349,10 @@ def entry_candidates(
     # question — whether it also closes positions already held.
     if not feats.regime[t]:
         return []
+    # Wait for the recovery to hold before buying into it.
+    if (cfg.regime_entry_confirm > 0 and feats.on_run is not None
+            and feats.on_run[t] < cfg.regime_entry_confirm):
+        return []
 
     close = data.close[t]
     ok = feats.universe[t].copy()
@@ -348,6 +406,34 @@ def entry_candidates(
     return out
 
 
+def size_limits(equity: float, cash: float, entry_px: float, stop: float,
+                turnover_20d: float, cfg: StrategyConfig) -> Dict[str, int]:
+    """
+    Every cap bearing on one position, as a share count. The smallest binds.
+
+    Returned as a mapping rather than folded straight into a minimum so the
+    caller can say *which* limit stopped a fill. "Could not size this position"
+    covers two situations that have nothing to do with each other — the book is
+    already fully invested, or the market is too thin to take the order — and
+    only the second is a problem. A book deploying to 100% by design hits the
+    first constantly.
+
+    Empty when the trade is unsizeable at all, which is a degenerate stop rather
+    than a cap.
+    """
+    risk_per_share = entry_px - stop
+    if risk_per_share <= 0 or entry_px <= 0:
+        return {}
+    lim = {
+        "risk": int(cfg.risk_pct * equity / risk_per_share),
+        "weight": int(cfg.max_weight * equity / entry_px),
+        "cash": int(cash / (entry_px * (1.0 + cfg.buy_charges))),
+    }
+    if turnover_20d > 0:
+        lim["liquidity"] = int(cfg.adv_cap * turnover_20d / entry_px)
+    return lim
+
+
 def position_size(equity: float, cash: float, entry_px: float, stop: float,
                   turnover_20d: float, cfg: StrategyConfig) -> int:
     """
@@ -358,20 +444,15 @@ def position_size(equity: float, cash: float, entry_px: float, stop: float,
     and a wild one a small position. The caps that follow are protective, not
     part of the edge.
     """
-    risk_per_share = entry_px - stop
-    if risk_per_share <= 0 or entry_px <= 0:
-        return 0
-    qty = int(cfg.risk_pct * equity / risk_per_share)
-    qty = min(qty, int(cfg.max_weight * equity / entry_px))
-    if turnover_20d > 0:
-        qty = min(qty, int(cfg.adv_cap * turnover_20d / entry_px))
-    qty = min(qty, int(cash / (entry_px * (1.0 + cfg.buy_charges))))
-    return max(qty, 0)
+    lim = size_limits(equity, cash, entry_px, stop, turnover_20d, cfg)
+    return max(min(lim.values()), 0) if lim else 0
 
 
 def exit_reason(*, close: float, stop: float, bars: int, regime_on: bool,
                 stale: int, cfg: StrategyConfig,
-                ema_value: Optional[float] = None) -> Optional[str]:
+                ema_value: Optional[float] = None,
+                off_run: int = 0, wk_value: Optional[float] = None,
+                is_week_end: bool = False) -> Optional[str]:
     """
     Whether an open position should be closed at the next open, and why.
 
@@ -383,9 +464,14 @@ def exit_reason(*, close: float, stop: float, bars: int, regime_on: bool,
         return EXIT_STALE
     if cfg.stop_on_close and np.isfinite(close) and close <= stop:
         return EXIT_STOP
-    if cfg.regime_exit and not regime_on:
+    # A confirmation window means the book rides out a single weak week rather
+    # than liquidating into it; the cost is entering a real decline later.
+    if cfg.regime_exit and not regime_on and off_run >= max(cfg.regime_exit_confirm, 1):
         return EXIT_REGIME
-    if bars >= cfg.time_stop:
+    if (cfg.weekly_ema_exit and is_week_end and wk_value is not None
+            and np.isfinite(wk_value) and np.isfinite(close) and close < wk_value):
+        return EXIT_WEEKLY
+    if cfg.time_stop is not None and bars >= cfg.time_stop:
         return EXIT_TIME
     if (cfg.ema_exit and bars >= cfg.ema_exit_min_hold and ema_value is not None
             and np.isfinite(ema_value) and np.isfinite(close) and close < ema_value):

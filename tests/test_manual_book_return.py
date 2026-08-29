@@ -42,6 +42,7 @@ def _market(closes: list[float]) -> tuple[rules.MarketData, rules.Features]:
         sma50=px, sma150=px, sma200=px, s200_rising=np.ones((t, n), bool),
         atr=ones, rs_pct=ones, tv20=ones * 1e9,
         sector_ok=np.ones((t, n), bool), sector_id=np.full(n, -1, np.int32),
+        group_id=np.full(n, -1, np.int32),
     )
     return md, feats
 

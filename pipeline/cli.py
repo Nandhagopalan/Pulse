@@ -66,6 +66,11 @@ def main(argv=None) -> int:
                    help="advance every session from this date to the latest (catch-up)")
     p.add_argument("--force", action="store_true",
                    help="re-advance a session already recorded (repair; does not undo)")
+    p.add_argument("--set-preset", metavar="NAME",
+                   help="point --book at this preset, then exit unless --since is given")
+    p.add_argument("--wipe", action="store_true",
+                   help="with --set-preset: clear that book's history so the new "
+                        "rules start flat (never touches the manual book)")
 
     p = sub.add_parser("verify", help="audit one symbol end to end")
     p.add_argument("symbol")
@@ -121,6 +126,14 @@ def main(argv=None) -> int:
 
     elif args.cmd == "strategy":
         from .compute import strategy
+        if args.set_preset:
+            if not args.book:
+                raise SystemExit("--set-preset needs --book")
+            for book_id in args.book:
+                strategy.retune(book_id, args.set_preset, wipe=args.wipe,
+                                capital=args.capital, started_on=args.since)
+            if args.since is None:
+                return 0
         strategy.run(book_ids=args.book, session=args.date, capital=args.capital,
                      force=args.force, since=args.since)
 

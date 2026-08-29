@@ -33,18 +33,53 @@ _COLS = ("open", "high", "low", "close", "volume", "traded_value", "raw_close")
 # Over-grouping is the safe failure: it declines a trade rather than doubling a
 # bet the risk engine cannot see.
 _TRACKS = (
-    ("silver", ("SILVER", "SILVRETF", "TATSILV", "ESILVER", "MASILVER")),
-    ("gold",   ("GOLD", "EGOLD", "IGOLD", "MGOLD", "QGOLDHALF")),
-    ("liquid", ("LIQUID", "LIQGRW", "CASHIETF", "AONELIQ", "ELIQUID")),
-    ("debt",   ("GILT", "GSEC", "SDL", "GS813", "BND", "BBETF", "EBBETF",
-                "IPGETF", "NCPSESDL", "ABGSEC", "SBIGETS", "G5", "5GSEC", "10GS")),
-    ("bank",   ("BANK", "BNK", "BFSI", "PSUBK", "PVTBK", "FINIETF", "ECAPINSURE",
-                "INSUREIETF")),
-    ("tech",   ("TECH", "ITETF", "ITBEES", "ITIETF", "ITADD", "ITAXIS", "ITBETA",
-                "NIFIT", "ETFIT", "DSPIT", "KOTAKIT", "NETFIT", "NIFITETF",
-                "INTERNET", "FANG", "MON100", "N100", "MONQ50", "NQ")),
-    ("pharma", ("PHARMA", "HEALTH")),
+    # Commodity and cash-like, matched first: these are the wrappers most often
+    # duplicated across AMCs, and the ones least like an equity sector.
+    ("silver",   ("SILVER", "SILVRETF", "TATSILV", "ESILVER", "MASILVER")),
+    ("gold",     ("GOLD", "EGOLD", "IGOLD", "MGOLD", "QGOLDHALF")),
+    ("liquid",   ("LIQUID", "LIQGRW", "CASHIETF", "AONELIQ", "ELIQUID")),
+    ("debt",     ("GILT", "GSEC", "SDL", "GS813", "BND", "BBETF", "EBBETF",
+                  "IPGETF", "NCPSESDL", "ABGSEC", "SBIGETS", "5GSEC", "10GS")),
+    # Sector wrappers. Narrower names come before broader ones, so PSUBNKBEES
+    # lands in psubank rather than bank, and BANKBEES does not land in nifty.
+    ("psubank",  ("PSUBANK", "PSUBNK", "PSUBK", "PSBK")),
+    ("pvtbank",  ("PVTBAN", "PVTBK", "PVBK")),
+    ("bank",     ("BANK", "BNK", "BFSI", "FINIETF", "ECAPINSURE", "INSUREIETF")),
+    ("tech",     ("TECH", "ITETF", "ITBEES", "ITIETF", "ITADD", "ITAXIS",
+                  "ITBETA", "NIFIT", "ETFIT", "DSPIT", "KOTAKIT", "NETFIT",
+                  "NIFITETF", "INTERNET", "FANG", "MON100", "N100", "MONQ50")),
+    ("pharma",   ("PHARMA", "HEALTH", "HOSPI")),
+    ("auto",     ("AUTO",)),
+    ("fmcg",     ("FMCG", "CONSUM", "CONSUMER", "CONS", "TOUR")),
+    ("metal",    ("METAL", "MINING")),
+    ("energy",   ("ENERGY", "OILGAS", "OILIETF", "POWER", "COMMODIT", "COMMO")),
+    ("infra",    ("INFRA", "REALTY", "RLTY", "CAPM", "CEMNT", "RAIL")),
+    ("defence",  ("DEFENCE", "DEFNC")),
+    ("psu",      ("CPSE", "PSE", "BHARATIWIN", "ICICIB22", "MAKEINDIA")),
+    ("chemical", ("CHEM",)),
+    # Broad market and factor wrappers. These are the ones a book buys when it
+    # wants the market rather than a slice of it.
+    ("midcap",   ("MIDCAP", "MID150", "M100", "M150", "MIDQ50", "MIDSELIETF",
+                  "MIDSMALL", "LARGEMID", "MC150")),
+    ("smallcap", ("SMALL", "SML", "SC250")),
+    ("next50",   ("JUNIORBEES", "NEXT50", "NXT50", "NEXT30", "NV20")),
+    ("broad",    ("NIFTY", "SENSEX", "SENSX", "NIF", "N50", "ELM250", "EQUAL",
+                  "TOP100", "TOP10", "TOP15", "TOP20", "MSCI", "MULTICAP",
+                  "ICNX100", "ICCNX100", "SPICE", "ESG", "SHARIA", "DIVID",
+                  "DIVOPP", "ALPHA", "MOMENT", "QUAL", "VALUE", "LOWVOL",
+                  "LVOL", "IPO", "MNC", "SERVICE", "MANUF", "MFG")),
 )
+
+# Fund groups that behave like an equity sector, and so can stand in for one
+# when the overlay is ranking sectors. Commodity, cash and debt wrappers are
+# deliberately absent: silver is not a sector, and letting it compete for a slot
+# in a sector-rotation rule would be a different strategy wearing the same name.
+SECTOR_LIKE = frozenset({
+    "psubank", "pvtbank", "bank", "tech", "pharma", "auto", "fmcg", "metal",
+    "energy", "infra", "defence", "psu", "chemical",
+    "midcap", "smallcap", "next50", "broad",
+})
+
 
 
 def _classify(symbol: str, isin: Optional[str]) -> tuple:
