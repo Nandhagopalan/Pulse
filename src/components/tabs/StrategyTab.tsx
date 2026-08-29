@@ -20,6 +20,45 @@ const money = (v: number) =>
 const pct = (v: number) => (v * 100).toFixed(2) + '%';
 const rupees = (v: number) => '₹' + Math.round(v).toLocaleString('en-IN');
 
+type Cfg = Record<string, unknown> | null | undefined;
+
+const num = (v: unknown, fallback: number) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+/*
+ * Charges come from the book's own config, so a book tuned to a different
+ * broker is priced by its own assumptions; the fallbacks are the server's
+ * constants, which are the backtest's.
+ */
+const buyCharges = (c: Cfg) => num(c?.buy_charges, 0.00147);
+const sellCharges = (c: Cfg) => num(c?.sell_charges, 0.00137);
+
+/* What the shares cost — the same outlay the API debited from cash on entry. */
+const costOf = (entry: number, qty: number, c: Cfg) => entry * qty * (1 + buyCharges(c));
+
+/*
+ * P&L on an open position, net of both sides' charges.
+ *
+ * Every closed figure on this page is net: the server books `pnl` as proceeds
+ * after sell charges minus cost with buy charges, and the backtest does the
+ * same. Marking open rows gross made them read better than the identical trade
+ * would the moment it closed — about 0.28% of the position, which on a typical
+ * 8% stop distance is a free 0.03R. These now agree.
+ */
+const netPnl = (entry: number, last: number, qty: number, c: Cfg) =>
+  last * (1 - sellCharges(c)) * qty - costOf(entry, qty, c);
+
+/*
+ * R is P&L over the money that was on the line at entry — `r_per_share` is
+ * entry minus the *initial* stop and never rebases when the stop trails, so a
+ * winner that has ratcheted its stop up still reports against the risk actually
+ * taken. Same expression the server uses when it closes a trade.
+ */
+const rMult = (pnl: number, rPerShare: number, qty: number) =>
+  rPerShare > 0 && qty > 0 ? pnl / (rPerShare * qty) : 0;
+
 const th: React.CSSProperties = {
   textAlign: 'right', padding: '7px 10px', fontSize: 10.5, letterSpacing: '.08em',
   textTransform: 'uppercase', color: T.muted, fontWeight: 600,
@@ -31,6 +70,13 @@ const td: React.CSSProperties = {
   whiteSpace: 'nowrap', color: T.text,
 };
 const tdL = { ...td, textAlign: 'left' as const, color: T.ink, fontWeight: 600 };
+const tf: React.CSSProperties = {
+  ...td, borderBottom: 'none', borderTop: `1px solid ${T.border}`, fontWeight: 700,
+};
+const tfL: React.CSSProperties = {
+  ...tf, textAlign: 'left', color: T.muted, fontWeight: 600, fontSize: 10.5,
+  letterSpacing: '.08em', textTransform: 'uppercase',
+};
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ padding: '22px 4px', color: T.muted, fontSize: 13 }}>{children}</div>;
@@ -73,6 +119,18 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
   const { state, performance: perf, signals, positions, closed, book } = data;
   const on = !!state?.regime_on;
   const editable = book.fillMode === 'manual';
+
+  /*
+   * What the open book cost and what it is worth now. Deployment was already
+   * on the card as a percentage, but the rupee figure it is a percentage *of*
+   * was nowhere on the page — position size could only be read off tomorrow's
+   * signals, which say nothing about what is already held.
+   */
+  const invested = positions.reduce((a, p) => a + costOf(p.entry_px, p.qty, book.config), 0);
+  const marked = positions.reduce((a, p) => a + (p.last_px ?? p.entry_px) * p.qty, 0);
+  const openPnl = positions.reduce(
+    (a, p) => a + netPnl(p.entry_px, p.last_px ?? p.entry_px, p.qty, book.config), 0);
+  const realised = closed.reduce((a, c) => a + c.pnl, 0);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -124,6 +182,15 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
           <div><Label>Equity</Label><Mono size={19}>{money(state?.equity ?? 0)}</Mono></div>
           <div><Label>Cash</Label><Mono size={19}>{money(state?.cash ?? 0)}</Mono></div>
           <div><Label>Deployed</Label><Mono size={19}>{pct(state?.deployed ?? 0)}</Mono></div>
+          <div>
+            <Label>Invested</Label>
+            <Mono size={19}>{money(invested)}</Mono>
+            {/* Cost carries the buy charges, so this is cash the book actually
+                parted with, not the notional value of the shares. */}
+            <div style={{ fontSize: 10.5, color: T.faint }}>
+              at cost · now {money(marked)}
+            </div>
+          </div>
           <div>
             <Label>Positions</Label>
             <Mono size={19}>{state?.n_open ?? 0}
@@ -227,11 +294,12 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
           <Empty>The book is flat.</Empty>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 760 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 900 }}>
               <thead><tr>
                 <th style={{ ...th, textAlign: 'left' }}>Symbol</th>
                 <th style={{ ...th, textAlign: 'left' }}>Entered</th>
                 <th style={th}>Entry</th><th style={th}>Last</th><th style={th}>Stop</th>
+                <th style={th}>Qty</th><th style={th}>Invested</th>
                 <th style={th}>P&amp;L</th><th style={th}>R</th>
                 <th style={th}>Held</th>
                 <th style={{ ...th, textAlign: 'left' }}>Action</th>
@@ -239,8 +307,10 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
               <tbody>
                 {positions.map(p => {
                   const last = p.last_px ?? p.entry_px;
-                  const pnl = (last - p.entry_px) * p.qty;
-                  const r = p.r_per_share > 0 ? (last - p.entry_px) / p.r_per_share : 0;
+                  /* Net of charges, so a row here reads the same as it will
+                     once it moves down to the closed table. */
+                  const pnl = netPnl(p.entry_px, last, p.qty, book.config);
+                  const r = rMult(pnl, p.r_per_share, p.qty);
                   const maxBars = Number(book.config?.time_stop ?? 60);
                   return (
                     <tr key={p.id}>
@@ -249,6 +319,8 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
                       <td style={td}>{p.entry_px.toFixed(2)}</td>
                       <td style={td}>{last.toFixed(2)}</td>
                       <td style={{ ...td, color: T.down }}>{p.stop.toFixed(2)}</td>
+                      <td style={td}>{p.qty}</td>
+                      <td style={td}>{rupees(costOf(p.entry_px, p.qty, book.config))}</td>
                       <td style={{ ...td, color: pnl >= 0 ? T.up : T.down }}>{rupees(pnl)}</td>
                       <td style={{ ...td, color: r >= 0 ? T.up : T.down }}>{r.toFixed(2)}R</td>
                       <td style={td}>
@@ -276,6 +348,12 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
                   );
                 })}
               </tbody>
+              <tfoot><tr>
+                <td style={tfL} colSpan={6}>Total &middot; {positions.length} open</td>
+                <td style={tf}>{rupees(invested)}</td>
+                <td style={{ ...tf, color: openPnl >= 0 ? T.up : T.down }}>{rupees(openPnl)}</td>
+                <td style={tf} colSpan={3} />
+              </tr></tfoot>
             </table>
           </div>
         )}
@@ -309,19 +387,28 @@ export function StrategyTab({ D, route, navigate }: { D: MarketData; route: Rout
                   </tr>
                 ))}
               </tbody>
+              <tfoot><tr>
+                <td style={tfL} colSpan={4}>
+                  {/* The server serves the last 100 closes, so at the cap this
+                      is the total of what is shown, not of the whole record. */}
+                  Realised &middot; {closed.length >= 100 ? 'last ' : ''}{closed.length} trade{closed.length === 1 ? '' : 's'}
+                </td>
+                <td style={{ ...tf, color: realised >= 0 ? T.up : T.down }}>{rupees(realised)}</td>
+                <td style={tf} colSpan={2} />
+              </tr></tfoot>
             </table>
           </div>
         </Card>
       )}
 
       {editing && (
-        <EditPosition pos={editing}
+        <EditPosition pos={editing} config={book.config}
           onClose={() => setEditing(null)}
           onDone={() => { setEditing(null); reload(); }} />
       )}
 
       {closing && (
-        <ClosePosition pos={closing} session={state?.date ?? ''}
+        <ClosePosition pos={closing} session={state?.date ?? ''} config={book.config}
           onDone={() => { setClosing(null); reload(); }} />
       )}
 
@@ -382,8 +469,11 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
    */
   const lx = Number(last) > 0 ? Number(last) : e;
   const q = Math.floor(Number(qty));
-  const openPnl = q > 0 && e > 0 ? (lx - e) * q : 0;
-  const rNow = e > st && st > 0 ? (lx - e) / (e - st) : 0;
+  /* Net, like every other P&L on this page, and like the row this will become. */
+  const openPnl = q > 0 && e > 0 ? netPnl(e, lx, q, config) : 0;
+  const rNow = rMult(openPnl, e - st, st > 0 && e > st ? q : 0);
+  /* The outlay the server will check cash against, charges included. */
+  const outlay = q > 0 && e > 0 ? costOf(e, q, config) : 0;
 
   // Picking a name the engine flagged fills the row from its own figures.
   const prefill = (s: StrategySummary['signals'][number]) => {
@@ -468,6 +558,12 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
             Suggest {suggested} ({(riskPct * 100).toFixed(2)}% risk)
           </button>
         )}
+        {outlay > 0 && (
+          <span style={{ fontSize: 12.5, color: T.muted }}>
+            Invested <b style={{ color: T.ink }}>{rupees(outlay)}</b>
+            {equity > 0 && ` · ${((outlay / equity) * 100).toFixed(2)}% of book`}
+          </span>
+        )}
         {atRisk > 0 && (
           <span style={{ fontSize: 12.5, color: T.muted }}>
             At risk <b style={{ color: T.amber }}>{rupees(atRisk)}</b>
@@ -497,8 +593,8 @@ function AddPosition({ book, config, equity, session, signals, stocks, onDone }:
  * close. Everything derived from a position (P&L, R, held) comes from these
  * five fields, so they are edited together and previewed here before saving.
  */
-function EditPosition({ pos, onClose, onDone }: {
-  pos: StrategyPosition; onClose: () => void; onDone: () => void;
+function EditPosition({ pos, config, onClose, onDone }: {
+  pos: StrategyPosition; config: Cfg; onClose: () => void; onDone: () => void;
 }) {
   const [entry, setEntry] = useState(String(pos.entry_px));
   const [stop, setStop] = useState(String(pos.stop));
@@ -522,8 +618,8 @@ function EditPosition({ pos, onClose, onDone }: {
   const resets = st < pos.init_stop;
   const baseline = resets ? st : pos.init_stop;
   const rPerShare = e - baseline;
-  const pnl = q > 0 ? (lx - e) * q : 0;
-  const r = rPerShare > 0 ? (lx - e) / rPerShare : 0;
+  const pnl = q > 0 ? netPnl(e, lx, q, config) : 0;
+  const r = rMult(pnl, rPerShare, q);
   const valid = e > 0 && st > 0 && st < e && lx > 0 && q > 0 && rPerShare > 0
     && /^\d{4}-\d{2}-\d{2}$/.test(date);
 
@@ -572,7 +668,8 @@ function EditPosition({ pos, onClose, onDone }: {
         <div style={{ margin: '13px 0 4px', fontSize: 13 }}>
           P&amp;L <b style={{ color: pnl >= 0 ? T.up : T.down }}>{rupees(pnl)}</b>
           <span style={{ color: T.faint }}>
-            {' · '}{r.toFixed(2)}R{rPerShare > 0 && ` · risk ${rupees(rPerShare * q)}`}
+            {' · '}{r.toFixed(2)}R{q > 0 && ` · invested ${rupees(costOf(e, q, config))}`}
+            {rPerShare > 0 && q > 0 && ` · risk ${rupees(rPerShare * q)}`}
           </span>
         </div>
         <div style={{ fontSize: 11.5, color: T.faint, lineHeight: 1.5 }}>
@@ -599,16 +696,19 @@ function EditPosition({ pos, onClose, onDone }: {
 }
 
 /* Close a manual position. Charges match the backtest so the P&L is comparable. */
-function ClosePosition({ pos, session, onDone }: {
-  pos: StrategyPosition; session: string; onDone: () => void;
+function ClosePosition({ pos, session, config, onDone }: {
+  pos: StrategyPosition; session: string; config: Cfg; onDone: () => void;
 }) {
   const [px, setPx] = useState(String(pos.last_px ?? pos.entry_px));
   const [date, setDate] = useState(session);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const gross = (Number(px) - pos.entry_px) * pos.qty;
-  const r = pos.r_per_share > 0 ? (Number(px) - pos.entry_px) / pos.r_per_share : 0;
+  const exit = Number(px);
+  const priced = Number.isFinite(exit) && exit > 0;
+  const cost = costOf(pos.entry_px, pos.qty, config);
+  const pnl = priced ? netPnl(pos.entry_px, exit, pos.qty, config) : 0;
+  const r = rMult(pnl, pos.r_per_share, pos.qty);
 
   const submit = () => {
     setBusy(true); setErr(null);
@@ -627,7 +727,7 @@ function ClosePosition({ pos, session, onDone }: {
                  maxWidth: '100%', boxShadow: T.shadowPop }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>Close {pos.symbol}</div>
         <div style={{ fontSize: 12.5, color: T.muted, margin: '4px 0 14px' }}>
-          {pos.qty} @ {pos.entry_px.toFixed(2)} · entered {pos.entry_date}
+          {pos.qty} @ {pos.entry_px.toFixed(2)} · {rupees(cost)} invested · entered {pos.entry_date}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div><Label>Exit price</Label>
@@ -638,14 +738,19 @@ function ClosePosition({ pos, session, onDone }: {
               min={pos.entry_date} onChange={ev => setDate(ev.target.value)} /></div>
         </div>
         <div style={{ margin: '12px 0', fontSize: 13 }}>
-          Gross <b style={{ color: gross >= 0 ? T.up : T.down }}>{rupees(gross)}</b>
-          <span style={{ color: T.faint }}> · {r.toFixed(2)}R before charges</span>
+          {priced ? (
+            <>
+              P&amp;L <b style={{ color: pnl >= 0 ? T.up : T.down }}>{rupees(pnl)}</b>
+              <span style={{ color: T.faint }}> · {r.toFixed(2)}R after charges</span>
+            </>
+          ) : <span style={{ color: T.faint }}>Enter an exit price.</span>}
         </div>
         {err && <div style={{ fontSize: 12.5, color: T.down, marginBottom: 8 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button style={{ ...ghostBtn, padding: '6px 13px', fontSize: 12.5 }} onClick={onDone}>Cancel</button>
-          <button style={{ ...inkBtn, padding: '6px 14px', fontSize: 12.5 }}
-            disabled={busy} onClick={submit}>{busy ? 'Closing…' : 'Close position'}</button>
+          <button style={{ ...inkBtn, padding: '6px 14px', fontSize: 12.5,
+                           opacity: priced && !busy ? 1 : 0.5 }}
+            disabled={!priced || busy} onClick={submit}>{busy ? 'Closing…' : 'Close position'}</button>
         </div>
       </div>
     </div>
