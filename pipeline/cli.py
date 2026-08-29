@@ -7,6 +7,7 @@ Commands are dispatched here; `__main__.py` only forwards to `main()` so that
 
     python -m pipeline backfill            # 2007 → today, NSE archives → R2
     python -m pipeline reference           # refresh index constituents / sectors
+    python -m pipeline industry            # industry + sector labels, keyed by ISIN
     python -m pipeline actions             # rebuild the corporate action dataset
     python -m pipeline analytics           # compute the daily snapshot (dry run)
     python -m pipeline publish             # compute + upsert into Supabase
@@ -38,6 +39,10 @@ def main(argv=None) -> int:
     _add_store_args(p)
 
     p = sub.add_parser("reference", help="refresh index constituents and sector map")
+
+    p = sub.add_parser("industry", help="industry/sector labels for the lake, from BSE")
+    p.add_argument("--refresh", action="store_true", help="re-fetch every scrip")
+    p.add_argument("--limit", type=int, help="stop after N scrips (for a smoke test)")
 
     p = sub.add_parser("actions", help="rebuild corporate actions from the NSE feed")
     p.add_argument("--refresh", action="store_true", help="re-fetch years already cached in R2")
@@ -86,6 +91,11 @@ def main(argv=None) -> int:
     elif args.cmd == "reference":
         from .ingest import reference
         print(f"[reference] {reference.refresh()} constituent rows written")
+
+    elif args.cmd == "industry":
+        from .ingest import industry
+        table = industry.build(refresh=args.refresh, limit=args.limit)
+        print("[industry]", industry.summary(table))
 
     elif args.cmd == "actions":
         from .ingest import corporate_actions as ca

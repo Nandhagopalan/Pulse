@@ -26,6 +26,7 @@ import numpy as np
 
 from ..config import CURATED_DAILY, CURATED_INDEX, s3_uri
 from ..ingest import corporate_actions as ca
+from ..ingest.industry import INDUSTRY_KEY
 from ..ingest.reference import CONSTITUENTS_KEY
 from ..sources import nse, r2
 
@@ -67,11 +68,13 @@ def _uris():
         return (str(root / CURATED_DAILY / "*" / "data.parquet"),
                 str(root / CURATED_INDEX / "*" / "data.parquet"),
                 str(root / ca.ACTIONS_KEY),
-                str(root / CONSTITUENTS_KEY))
+                str(root / CONSTITUENTS_KEY),
+                str(root / INDUSTRY_KEY))
     return (s3_uri(f"{CURATED_DAILY}/*/data.parquet"),
             s3_uri(f"{CURATED_INDEX}/*/data.parquet"),
             s3_uri(ca.ACTIONS_KEY),
-            s3_uri(CONSTITUENTS_KEY))
+            s3_uri(CONSTITUENTS_KEY),
+            s3_uri(INDUSTRY_KEY))
 
 
 def _ema_matrix(values: np.ndarray, period: int) -> np.ndarray:
@@ -99,7 +102,7 @@ def _ema_matrix(values: np.ndarray, period: int) -> np.ndarray:
 
 def _load_window(con) -> dict:
     """Adjusted OHLCV matrices for the last WINDOW sessions."""
-    daily_glob, _, actions_uri, _ = _uris()
+    daily_glob, _, actions_uri, _, _ = _uris()
     # Resolve the window's start date first so the heavy adjustment join only
     # ever touches the recent slice rather than the whole lake.
     start = con.execute(
@@ -141,7 +144,7 @@ def _load_window(con) -> dict:
 
 def _load_aths(con) -> Dict[str, dict]:
     """Split-adjusted all-time high and first-listed date, over the full lake."""
-    daily_glob, _, actions_uri, _ = _uris()
+    daily_glob, _, actions_uri, _, _ = _uris()
     cte = ca.adjusted_bars_cte(daily_glob, actions_uri)
     rows = con.execute(
         cte + """
@@ -167,7 +170,7 @@ def _load_weekly(con) -> dict:
     included while still partial — a breakout should be visible on the day it
     happens, not the following Monday.
     """
-    daily_glob, _, actions_uri, _ = _uris()
+    daily_glob, _, actions_uri, _, _ = _uris()
     start = con.execute(
         f"""
         SELECT MIN(w) FROM (
@@ -340,7 +343,36 @@ def _trend_breaks(wk: dict) -> Dict[str, dict]:
 
 
 def _load_sectors(con) -> Dict[str, str]:
-    constituents = _uris()[3]
+    """
+    symbol -> sector, from the ISIN-keyed industry dataset where it exists.
+
+    `industry.parquet` labels ~81% of the lake against the NIFTY 500 file's 500
+    names, which is the difference between a sector view that says "Other" for
+    most of the market and one that does not. Joined on ISIN, so a company that
+    changed ticker still resolves.
+
+    Falls back to the constituent file when the industry dataset has not been
+    built. The two vocabularies are never merged — blending them would split one
+    sector across two labels and make the breadth numbers wrong.
+    """
+    daily, _, _, constituents, industry = _uris()
+    try:
+        rows = con.execute(
+            f"""
+            SELECT b.symbol, any_value(i.macro) AS sector
+            FROM (SELECT DISTINCT symbol, isin FROM read_parquet('{daily}')
+                  WHERE isin IS NOT NULL) b
+            JOIN read_parquet('{industry}') i ON i.isin = b.isin
+            WHERE i.macro IS NOT NULL
+            GROUP BY b.symbol
+            """
+        ).fetchall()
+        if rows:
+            return {r[0]: r[1] for r in rows}
+        print("[analytics] industry dataset empty; falling back to constituents")
+    except Exception as err:  # noqa: BLE001 — not built yet; fall back
+        print(f"[analytics] industry dataset unavailable ({err}); using constituents")
+
     try:
         rows = con.execute(
             f"""
