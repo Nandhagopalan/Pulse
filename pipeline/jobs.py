@@ -14,7 +14,7 @@ from typing import Optional
 
 def eod(session: Optional[date] = None) -> None:
     from .compute import analytics, publish, strategy
-    from .ingest import backfill, reference
+    from .ingest import backfill, industry, reference
     from .ingest import corporate_actions as ca
 
     today = session or date.today()
@@ -25,6 +25,16 @@ def eod(session: Optional[date] = None) -> None:
         reference.refresh()
     except Exception as err:  # noqa: BLE001 — stale sectors beat a failed run
         print(f"[eod] reference refresh failed ({err}) — continuing with cached map")
+
+    # Building the labels is a manual job — a few thousand exchange calls — but
+    # reconciling the ones already stored is a read-modify-write on a single R2
+    # object, so it belongs here. Nightly, the sector names cannot drift back
+    # apart between the builds; and the split they drift into is invisible
+    # downstream, where every label is an opaque key.
+    try:
+        industry.normalize()
+    except Exception as err:  # noqa: BLE001 — the labels are context, not the run
+        print(f"[eod] label reconciliation failed ({err}) — using them as stored")
 
     print("── ingest ───────────────────────────────────────────────")
     # Re-running the open year picks up today's session and repairs any day the
