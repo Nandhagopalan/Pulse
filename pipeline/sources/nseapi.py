@@ -10,8 +10,11 @@ which is the only reason this module exists rather than a scraper.
 
 `sector` here is the same vocabulary as BSE's `IndustryNew`, and `basicIndustry`
 the same as BSE's `Industry` — both exchanges publish the same NIC-derived
-scheme. That is what lets `ingest/industry.py` merge the two without a mapping
-layer, and why a symbol labelled by either source is labelled consistently.
+scheme, which is what lets `ingest/industry.py` merge the two without a mapping
+layer. Not the same *spelling* of it, though: NSE drops the commas, and for a
+few symbols still answers the pre-2018 scheme. The labels are returned here as
+served and reconciled in `ingest/taxonomy.py`, so that what one sector is called
+is decided in one place rather than by whichever exchange happened to answer.
 
 Listed companies only. A delisted symbol resolves to nothing here, which is why
 BSE remains the primary source: it is the one that still knows the dead.

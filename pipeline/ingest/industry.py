@@ -14,6 +14,7 @@ whether the company survived.
 
     python -m pipeline industry            # build, reusing what is already cached
     python -m pipeline industry --refresh  # re-fetch every scrip
+    python -m pipeline industry --normalize  # reconcile stored labels, no fetching
 
 Two calls list the scrips; the classification then costs one call per scrip, so
 a cold build is a few thousand requests. Rows already stored are not re-fetched
@@ -30,6 +31,7 @@ import pyarrow.parquet as pq
 
 from ..config import CURATED_DAILY, CURATED_INSTRUMENTS, config, s3_uri
 from ..sources import bse, nseapi, r2
+from . import taxonomy
 
 INDUSTRY_KEY = f"{CURATED_INSTRUMENTS}/industry.parquet"
 INDUSTRY_URI = s3_uri(INDUSTRY_KEY)
@@ -199,12 +201,40 @@ def build(refresh: bool = False, write: bool = True, limit: Optional[int] = None
         nseapi.close()
     print(f"[industry] NSE added {added} labels")
 
-    table = pa.Table.from_pylist(rows, schema=SCHEMA)
+    # Both sources are in, so both vocabularies are visible at once — the only
+    # point at which the two spellings of one sector can be told apart.
+    table = pa.Table.from_pylist(taxonomy.reconcile(rows), schema=SCHEMA)
     if write and rows:
-        buf = io.BytesIO()
-        pq.write_table(table, buf, compression="zstd")
-        r2.put_object(INDUSTRY_KEY, buf.getvalue(),
-                      content_type="application/vnd.apache.parquet")
+        _store(table)
+    return table
+
+
+def _store(table: pa.Table) -> None:
+    buf = io.BytesIO()
+    pq.write_table(table, buf, compression="zstd")
+    r2.put_object(INDUSTRY_KEY, buf.getvalue(),
+                  content_type="application/vnd.apache.parquet")
+
+
+def normalize(write: bool = True) -> pa.Table:
+    """
+    Reconcile the labels already stored, without asking either exchange again.
+
+    A full build costs a few thousand requests and only the labels are wrong,
+    not the rows, so the fix that reaches the deployed sector view is this one:
+    read, reconcile, write back.
+    """
+    rows = list(_cached().values())
+    if not rows:
+        print("[industry] nothing stored to normalize")
+        return pa.Table.from_pylist([], schema=SCHEMA)
+    before = {(r.get("macro"), r.get("industry")) for r in rows}
+    table = pa.Table.from_pylist(taxonomy.reconcile(rows), schema=SCHEMA)
+    after = {(r.get("macro"), r.get("industry")) for r in rows}
+    print(f"[industry] {len(rows)} rows, {len(before)} distinct labellings "
+          f"before, {len(after)} after")
+    if write:
+        _store(table)
     return table
 
 
