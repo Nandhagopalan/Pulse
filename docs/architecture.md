@@ -119,6 +119,27 @@ Not adjusted: demergers and schemes of arrangement. They move the price for real
 but no ratio is derivable from the filing, so they are left alone rather than
 guessed at.
 
+### 4.3 Highs and lows are on a closing basis
+
+All-time and 52-week extremes — `distATH`, `dist52`, `isATH`, `is52`, and the
+`newHighs`/`newLows` breadth counters — are computed from closes, never from
+intraday highs and lows.
+
+The two bases cannot be mixed. Every distance we publish is measured from the
+latest close, and the highest intraday print is not a level a close can reach,
+so measuring one against the other reports a stock as below a high it set
+itself. INDSWFTLAB closed at a record 388.55 on 2026-09-09 and read -3.82%
+against its own 404.00 spike from that same session; on the day this was fixed
+it was one of 81 stocks holding a record close while the dashboard showed them
+below their all-time high. Thin ETFs were worse — an illiquid spike print left
+SICAGEN reading 62% below an all-time high that was really 24% away.
+
+The distortion is one-directional: `MAX(close) <= MAX(high)`, so the intraday
+basis can only ever overstate the distance, never understate it.
+
+This is also the basis the strategy engine has always used — `rules.py` breaks
+out on `roll_max(close, ...)` — so the dashboard now agrees with the book.
+
 ## 5. Database schema
 
 Thirteen tables, defined in [`supabase/migrations`](../supabase/migrations) and

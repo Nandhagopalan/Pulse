@@ -107,17 +107,20 @@ def report(symbol: str, tail: int = 8) -> None:
             prev_adj = adj
 
     # ── Derived metrics ──────────────────────────────────────────────────────
+    # Closing basis, as the published snapshot computes them: an intraday spike
+    # is not a level the close can reach, so measuring one against the other
+    # reports a record close as below its own high. See _load_aths.
     stats = con.execute(
         cte + """
-        SELECT MAX(high) AS ath, arg_max(date, high) AS ath_date,
-               MAX(high) FILTER (WHERE date >= (SELECT MAX(date) FROM bars_adj) - 365) AS hi52,
-               MIN(low)  FILTER (WHERE date >= (SELECT MAX(date) FROM bars_adj) - 365) AS lo52,
+        SELECT MAX(close) AS ath, arg_max(date, close) AS ath_date,
+               MAX(close) FILTER (WHERE date >= (SELECT MAX(date) FROM bars_adj) - 365) AS hi52,
+               MIN(close) FILTER (WHERE date >= (SELECT MAX(date) FROM bars_adj) - 365) AS lo52,
                arg_max(close, date) AS last_close,
                MAX(date) AS last_date
         FROM bars_adj WHERE symbol = ?""", [symbol]
     ).fetchone()
     ath, ath_date, hi52, lo52, last_close, last_date = stats
-    print("\n  DERIVED (split-adjusted)")
+    print("\n  DERIVED (split-adjusted, closing basis)")
     print(f"    last close      {last_close:>12,.2f}   on {last_date}")
     print(f"    all-time high   {ath:>12,.2f}   on {ath_date}")
     print(f"    % from ATH      {(last_close - ath) / ath * 100:>12,.2f}%")
