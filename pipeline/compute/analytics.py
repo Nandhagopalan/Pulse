@@ -143,21 +143,30 @@ def _load_window(con) -> dict:
 
 
 def _load_aths(con) -> Dict[str, dict]:
-    """Split-adjusted all-time high and first-listed date, over the full lake."""
+    """
+    Split-adjusted all-time high and first-listed date, over the full lake.
+
+    On a *closing* basis, deliberately: every distance we publish is measured
+    from the latest close, and the highest intraday print is not a level that
+    close can ever reach. Measured against MAX(high), a stock that breaks out
+    and gives back part of the move reports itself as below an all-time high it
+    set hours earlier — INDSWFTLAB closed at a record 388.55 on 2026-09-09 and
+    read -3.82% against its own 404.00 spike that session. MAX(close) compares
+    like with like, so a record close reads 0.0%.
+    """
     daily_glob, _, actions_uri, _, _ = _uris()
     cte = ca.adjusted_bars_cte(daily_glob, actions_uri)
     rows = con.execute(
         cte + """
         SELECT symbol,
-               MAX(high)              AS ath_high,
-               arg_max(date, high)    AS ath_date,
+               MAX(close)             AS ath_close,
+               arg_max(date, close)   AS ath_date,
                MIN(date)              AS since
         FROM bars_adj
-        WHERE high > 0
         GROUP BY symbol
         """
     ).fetchall()
-    return {r[0]: {"high": r[1], "date": r[2].isoformat(), "since": r[3].isoformat()} for r in rows}
+    return {r[0]: {"close": r[1], "date": r[2].isoformat(), "since": r[3].isoformat()} for r in rows}
 
 
 def _load_weekly(con) -> dict:
@@ -440,7 +449,7 @@ def compute(con=None) -> dict:
         if n_t < 30:
             raise RuntimeError(f"only {n_t} sessions in the lake — backfill first")
 
-        close, high, low, vol = w["close"], w["high"], w["low"], w["volume"]
+        close, vol = w["close"], w["volume"]
         symbols = w["symbols"]
         last = n_t - 1
         latest = str(dates[last])
@@ -480,15 +489,18 @@ def compute(con=None) -> dict:
             agg["unchanged"][j] = int((v & (np.abs(c) <= 0.0001)).sum())
 
             lo_t = max(0, t - 251)
-            # A symbol delisted before this window, or listed after it, has an
-            # all-NaN row here. nanmax warns and returns NaN, which is exactly
-            # the answer we want — the `valid` mask excludes it either way.
+            # Closing basis, matching the 52-week extremes the per-symbol rows
+            # publish — an intraday poke through the band that the session gives
+            # back is not a new high. A symbol delisted before this window, or
+            # listed after it, has an all-NaN row here. nanmax warns and returns
+            # NaN, which is exactly the answer we want — the `valid` mask
+            # excludes it either way.
             with np.errstate(invalid="ignore"), warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                hi52 = np.nanmax(high[:, lo_t:t + 1], axis=1)
-                lo52 = np.nanmin(low[:, lo_t:t + 1], axis=1)
-            agg["newHighs"][j] = int((v & (hi52 > 0) & (high[:, t] >= hi52)).sum())
-            agg["newLows"][j] = int((v & np.isfinite(lo52) & (low[:, t] <= lo52)).sum())
+                hi52 = np.nanmax(close[:, lo_t:t + 1], axis=1)
+                lo52 = np.nanmin(close[:, lo_t:t + 1], axis=1)
+            agg["newHighs"][j] = int((v & (hi52 > 0) & (close[:, t] >= hi52)).sum())
+            agg["newLows"][j] = int((v & np.isfinite(lo52) & (close[:, t] <= lo52)).sum())
 
             for key, ema in (("above10", e10), ("above20", e20), ("above50", e50), ("above200", e200)):
                 agg[key][j] = int((v & ~np.isnan(ema[:, t]) & (close[:, t] > ema[:, t])).sum())
@@ -516,7 +528,7 @@ def compute(con=None) -> dict:
         lo_t = max(0, last - 251)
         with np.errstate(invalid="ignore"), warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows are delisted symbols
-            hi52_last = np.nanmax(high[:, lo_t:last + 1], axis=1)
+            hi52_last = np.nanmax(close[:, lo_t:last + 1], axis=1)
 
         bench = None
         for name in ("NIFTY 500", "NIFTY 50"):
@@ -538,8 +550,13 @@ def compute(con=None) -> dict:
             chg1w = float((price / p5 - 1) * 100) if not np.isnan(p5) and p5 > 0 else 0.0
 
             rec = aths.get(sym)
-            ath_high = max(rec["high"] if rec else 0.0, price)  # a new high today *is* the ATH
-            dist_ath = max(0.0, (ath_high - price) / ath_high * 100) if ath_high > 0 else 0.0
+            # Both windows already contain today's close, so the peak can never
+            # sit below `price`. The max() is a floor for the one case that
+            # escapes that: a symbol absent from `aths` altogether, which then
+            # reads as trading at its own all-time high rather than dividing by
+            # zero.
+            ath_close = max(rec["close"] if rec else 0.0, price)
+            dist_ath = max(0.0, (ath_close - price) / ath_close * 100) if ath_close > 0 else 0.0
             hi52 = hi52_last[i]
             dist52 = max(0.0, float((hi52 - price) / hi52 * 100)) if hi52 > 0 else 0.0
 
