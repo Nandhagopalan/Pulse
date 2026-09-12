@@ -437,9 +437,12 @@ copying. Neither the pipeline nor the server issues DDL.
 - **Dates are `TEXT`** (`'YYYY-MM-DD'`). A `DATE` column returns through node-pg
   as a JS `Date` and JSON-serialises to `2026-08-21T00:00:00.000Z`, which the UI
   would have to re-trim. Every other table already stores ISO strings.
-- **Money is `REAL`, not `NUMERIC`.** node-pg returns `NUMERIC` as a *string* to
-  preserve precision; the UI does arithmetic on these, and a paper book at rupee
-  scale is far inside a double's range.
+- **Money is `DOUBLE PRECISION`** — not `NUMERIC`, and emphatically not `REAL`.
+  node-pg returns `NUMERIC` as a *string* to preserve precision, and the UI does
+  arithmetic on these. `REAL` is the trap: float4 carries ~7 significant digits
+  and a compounding book at rupee scale needs 9, so equity of 5,169,360.42 does
+  not survive the round trip and the error compounds into position sizing.
+  Prices in the baseline tables are `REAL` because they are quotes, not a ledger.
 - **The config blob is `TEXT` holding JSON**, matching `breadth_daily.data`.
 
 Verified by applying all three migrations in order to a throwaway Postgres 16:

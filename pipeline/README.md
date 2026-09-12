@@ -58,9 +58,11 @@ annotations to 3.12 syntax is a separate change from turning linting on.
 | **DuckDB** | nothing — it is a library, not a server | Runs inside the job, scans the Parquet on R2, exits. Nothing to host or pay for. |
 | **Supabase** | the latest computed state per symbol, plus user tables | This is the only thing in the request path, so it stays small and indexed. |
 
-Supabase holds only what a request reads — 13 tables, listed in
+Supabase holds only what a request reads — 19 tables, listed in
 [`supabase/migrations`](../supabase/migrations), which is the single source of
-truth for that schema:
+truth for that schema. Every dataset on both sides of the line — R2 keys, Parquet
+schemas, Postgres columns, and which code writes and reads each — is catalogued
+in [docs/data-map.md](../docs/data-map.md). Apply pending migrations with:
 
 ```bash
 supabase db push        # apply pending migrations
