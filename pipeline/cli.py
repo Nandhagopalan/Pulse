@@ -14,6 +14,7 @@ Commands are dispatched here; `__main__.py` only forwards to `main()` so that
     python -m pipeline publish             # compute + upsert into Supabase
     python -m pipeline eod                 # nightly chain: ingest → actions → publish
     python -m pipeline verify RELIANCE     # audit one symbol end to end
+    python -m pipeline audit               # audit the whole universe for unapplied actions
     python -m pipeline summary             # what the lake currently holds
     python -m pipeline sync --local DIR    # push a local mirror into R2
 """
@@ -79,6 +80,13 @@ def main(argv=None) -> int:
     p.add_argument("symbol")
     _add_store_args(p)
 
+    p = sub.add_parser("audit", help="scan the adjusted history for unapplied actions")
+    p.add_argument("--warn", action="store_true",
+                   help="report and exit 0 even when something is unexplained")
+    p.add_argument("--accept-current", action="store_true",
+                   help="rewrite accepted_residuals.json from what the lake shows now")
+    _add_store_args(p)
+
     p = sub.add_parser("summary", help="lake contents")
     _add_store_args(p)
 
@@ -140,6 +148,21 @@ def main(argv=None) -> int:
                 return 0
         strategy.run(book_ids=args.book, session=args.date, capital=args.capital,
                      force=args.force, since=args.since)
+
+    elif args.cmd == "audit":
+        from . import audit as audit_mod
+        if args.accept_current:
+            n = audit_mod.rebuild_accepted()
+            print(f"[audit] accepted_residuals.json now lists {n} reviewed residuals")
+        else:
+            # A findings failure is an expected outcome, not a crash: report it
+            # as an exit code rather than a traceback, so CI logs show the
+            # verdict and not a stack.
+            try:
+                audit_mod.run(strict=not args.warn)
+            except audit_mod.AuditFailed as err:
+                print(f"[audit] FAILED — {err}")
+                return 1
 
     elif args.cmd == "verify":
         from . import verify

@@ -167,6 +167,26 @@ def _f(v) -> float:
         return 0.0
 
 
+def log_event(job: str, session: str, status: str, detail: str) -> None:
+    """
+    Record one line in `ingest_log`, best effort.
+
+    Used by steps that report a verdict rather than write data — the audit, in
+    particular, whose whole value is that somebody can see what it found after
+    the run that found it has ended.
+    """
+    try:
+        with psycopg.connect(config.require_supabase()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ingest_log (ts, job, date, status, detail) VALUES (%s, %s, %s, %s, %s)",
+                    (datetime.now(timezone.utc).isoformat(), job, session, status, detail[:500]),
+                )
+            conn.commit()
+    except Exception as err:  # noqa: BLE001 — a log line must not mask the thing it logs
+        print(f"[publish] could not record {job} in ingest_log ({err})")
+
+
 def run(snap: Optional[dict] = None) -> None:
     from . import analytics
 

@@ -1,0 +1,40 @@
+{
+  "note": "Re-basings that survive every rule the audit can apply: not a fund unit, no demerger, scheme or rights issue filed anywhere near the date, and not a move the next fortnight undoes. Each was reviewed by hand and left unadjusted. Keep this list short \u2014 it suppresses an alarm, and an entry added carelessly hides a real unapplied action for good, which is exactly what happened when this file was a 78-row snapshot instead of a reviewed remainder.",
+  "accepted": [
+    {
+      "symbol": "GTL",
+      "date": "2011-06-20",
+      "implied": 2.644
+    },
+    {
+      "symbol": "JINDALSTEL",
+      "date": "2008-01-21",
+      "implied": 6.8261
+    },
+    {
+      "symbol": "PURVA",
+      "date": "2008-10-24",
+      "implied": 1.8344
+    },
+    {
+      "symbol": "SHEKHAWATI",
+      "date": "2024-09-10",
+      "implied": 0.102
+    },
+    {
+      "symbol": "STAR",
+      "date": "2013-12-19",
+      "implied": 2.3607
+    },
+    {
+      "symbol": "SUNTV",
+      "date": "2007-07-23",
+      "implied": 4.0283
+    },
+    {
+      "symbol": "SWELECTES",
+      "date": "2012-07-17",
+      "implied": 1.9215
+    }
+  ]
+}

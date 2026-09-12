@@ -13,6 +13,7 @@ from typing import Optional
 
 
 def eod(session: Optional[date] = None) -> None:
+    from . import audit
     from .compute import analytics, publish, strategy
     from .ingest import backfill, industry, reference
     from .ingest import corporate_actions as ca
@@ -65,3 +66,33 @@ def eod(session: Optional[date] = None) -> None:
     print(f"[eod] {snap['date']}: {b['universe']} stocks · "
           f"adv {b['advances']} / dec {b['declines']} · "
           f"{b['newHighs']} new highs · {b['athCount']} at ATH")
+
+    print("── audit ────────────────────────────────────────────────")
+    # Last, and the only step allowed to fail the night.
+    #
+    # Deliberately after publish: the snapshot is already in Supabase by now, so
+    # raising here costs nobody their data. What it buys is the one notification
+    # channel this repo actually has — a failed scheduled workflow, which GitHub
+    # mails. An audit that printed and returned would land exactly where the
+    # `unverified` bucket landed, which is how a 10x re-basing on AHCL went five
+    # months without anyone seeing it.
+    #
+    # The distinction that matters: a *finding* fails the run, an *outage* does
+    # not. R2 being unreachable is not evidence of bad data, and failing on it
+    # would teach everyone to ignore the mail.
+    try:
+        findings = audit.run(strict=False)
+    except Exception as err:  # noqa: BLE001 — an unreachable lake is not a finding
+        print(f"[eod] audit could not run ({err}) — snapshot already published")
+        return
+
+    if findings:
+        detail = ", ".join(f"{f.symbol}@{f.date} k={f.implied:.2f}" for f in findings[:10])
+        publish.log_event("audit", snap["date"], "failed",
+                          f"{len(findings)} unexplained re-basing(s): {detail}")
+        raise audit.AuditFailed(
+            f"{len(findings)} unexplained re-basing(s) in the adjusted history: {detail}. "
+            "Each is a split or bonus that was not applied, or a demerger to record "
+            "in pipeline/accepted_residuals.json."
+        )
+    publish.log_event("audit", snap["date"], "ok", "no unexplained re-basings")
