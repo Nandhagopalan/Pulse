@@ -30,7 +30,7 @@ when the pipeline runs. This is a property of the design, not a gap in it (§13.
         │
         ▼
   React (Vite) ──► Node API ──► Supabase Postgres ◄── GitHub Actions, nightly 19:45 IST
-   src/            server/       13 tables, a few MB        │
+   src/            server/       19 tables, a few MB        │
                                                             │
                           NSE archives ──► R2 Parquet lake ──► DuckDB ──► publish
                             bhavcopy        19 yrs, ~8M bars   (one pass)
@@ -142,7 +142,7 @@ out on `roll_max(close, ...)` — so the dashboard now agrees with the book.
 
 ## 5. Database schema
 
-Thirteen tables, defined in [`supabase/migrations`](../supabase/migrations) and
+Nineteen tables, defined in [`supabase/migrations`](../supabase/migrations) and
 nowhere else. Neither the server nor the pipeline issues DDL; `supabase db push`
 applies them, and `supabase start` applies the same files to the local Docker
 stack, so dev and production are built from identical SQL.
