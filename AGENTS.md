@@ -10,6 +10,7 @@ Deeper references, in the order you will usually want them:
 | [docs/data-map.md](docs/data-map.md) | Every dataset: exact R2 keys, Parquet schemas, Supabase tables and columns, who writes each and who reads it |
 | [docs/architecture.md](docs/architecture.md) | How the system is built and deployed, and why each decision went the way it did |
 | [docs/strategy-engine.md](docs/strategy-engine.md) | The rules-based swing engine, its parameters and its paper book |
+| [docs/nifty-options-strategies.md](docs/nifty-options-strategies.md) | NIFTY options strategy playbook: each strategy as simulable rules and adjustments, with the data and simulation readiness each needs |
 | [pipeline/README.md](pipeline/README.md) | The pipeline in its own words — commands, corporate actions, the audit |
 | [server/README.md](server/README.md) | The Node backend |
 

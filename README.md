@@ -15,7 +15,7 @@ integration; the numbers advance once a night when the pipeline runs.
 | `server/` | Backend: Google SSO + REST API — see [server/README.md](server/README.md) |
 | `api/` | Vercel adapter — serves `server/`'s routes as one function |
 | `pipeline/` | Python batch pipeline: NSE → R2 Parquet lake → DuckDB analytics → Supabase — see [pipeline/README.md](pipeline/README.md) |
-| `docs/` | [Data map](docs/data-map.md) — every dataset, its schema, and which code writes and reads it<br>[Architecture and deployment](docs/architecture.md) — how the system is built and why<br>[Strategy engine](docs/strategy-engine.md) — the rules-based swing engine and its paper book |
+| `docs/` | [Data map](docs/data-map.md) — every dataset, its schema, and which code writes and reads it<br>[Architecture and deployment](docs/architecture.md) — how the system is built and why<br>[Strategy engine](docs/strategy-engine.md) — the rules-based swing engine and its paper book<br>[NIFTY options playbook](docs/nifty-options-strategies.md) — option strategies as simulable rules and adjustments, and the data they need |
 | `AGENTS.md` | Orientation for coding agents: the repo map, the nightly chain, the invariants and the traps |
 
 ## Quick start
