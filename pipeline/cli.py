@@ -17,6 +17,8 @@ Commands are dispatched here; `__main__.py` only forwards to `main()` so that
     python -m pipeline audit               # audit the whole universe for unapplied actions
     python -m pipeline summary             # what the lake currently holds
     python -m pipeline sync --local DIR    # push a local mirror into R2
+    python -m pipeline fno --start 2011-01-01 --end 2022-12-31 --bucket NAME
+                                           # index futures + options into the F&O bucket
 """
 from __future__ import annotations
 
@@ -88,6 +90,15 @@ def main(argv=None) -> int:
     _add_store_args(p)
 
     p = sub.add_parser("summary", help="lake contents")
+    _add_store_args(p)
+
+    p = sub.add_parser("fno", help="index futures and options into the separate F&O bucket")
+    p.add_argument("--start", type=date.fromisoformat)
+    p.add_argument("--end", type=date.fromisoformat)
+    p.add_argument("--symbols", default="NIFTY,BANKNIFTY", help="comma-separated index symbols")
+    p.add_argument("--bucket", help="R2 bucket for the F&O lake (default: FNO_R2_BUCKET)")
+    p.add_argument("--force", action="store_true", help="rebuild years already curated")
+    p.add_argument("--summary", action="store_true", help="only print what the F&O lake holds")
     _add_store_args(p)
 
     p = sub.add_parser("sync", help="upload a local mirror into R2")
@@ -170,6 +181,16 @@ def main(argv=None) -> int:
 
     elif args.cmd == "summary":
         backfill.lake_summary()
+
+    elif args.cmd == "fno":
+        from .ingest import fno
+        fno.configure(bucket=args.bucket, local=args.local, with_r2=not args.no_r2)
+        if not args.summary:
+            if args.start is None or args.end is None:
+                raise SystemExit("fno needs --start and --end (or --summary)")
+            symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+            fno.run(args.start, args.end, symbols=symbols, force=args.force)
+        fno.summary()
 
     elif args.cmd == "sync":
         backfill.sync_to_r2(prefixes=args.prefix)

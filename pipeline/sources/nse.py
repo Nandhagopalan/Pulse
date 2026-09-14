@@ -18,9 +18,9 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from time import sleep
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import requests
 
@@ -299,3 +299,314 @@ def sessions(start: date, end: date) -> Iterator[date]:
         if d.weekday() < 5:
             yield d
         d -= timedelta(days=1)
+
+
+# ── Equity derivatives: the F&O bhavcopy ─────────────────────────────────────
+#
+# Same archive host, same zip-of-CSV shape and the same UDiFF cut-over date as the
+# cash bhavcopy, with different column names on each side of it:
+#
+#   legacy  < 2024-01-01  /content/historical/DERIVATIVES/YYYY/MON/foDDMONYYYYbhav.csv.zip
+#           INSTRUMENT,SYMBOL,EXPIRY_DT,STRIKE_PR,OPTION_TYP,OPEN,HIGH,LOW,CLOSE,SETTLE_PR,
+#           CONTRACTS,VAL_INLAKH,OPEN_INT,CHG_IN_OI,TIMESTAMP
+#   UDiFF   >= 2024-01-01 /content/fo/BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip
+#           FinInstrmTp,TckrSymb,XpryDt,StrkPric,OptnTp,OpnPric..ClsPric,PrvsClsgPric,
+#           UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,TtlTradgVol,TtlTrfVal,
+#           TtlNbOfTxsExctd,NewBrdLotQty (among others)
+#
+# Two unit facts hold in *both* layouts and are easy to get wrong:
+#   - volume is in contracts, but open interest is in units (contracts x lot).
+#     Futures turnover / (close x lot) reproduces the volume field, and summed
+#     index-option OI / the clearing house's participant-wise contract count
+#     comes out at the lot size.
+#   - turnover is notional, (strike + premium) x units for an option.
+# The legacy file has no lot size column; `lot_from_turnover` recovers it.
+#
+# Legacy SETTLE_PR on option rows is not reliable as the option's own settlement
+# (in 2023 files it carries the underlying's close), so option prices come from
+# CLOSE, which holds the settlement value even for strikes that did not trade.
+
+INDEX_FO_KINDS = {"FUTIDX": "FUT", "OPTIDX": "OPT", "IDF": "FUT", "IDO": "OPT"}
+
+
+def fo_bhav_url(d: date) -> str:
+    if d >= UDIFF_FROM:
+        return f"{ARCHIVES}/content/fo/BhavCopy_NSE_FO_0_0_0_{d.strftime('%Y%m%d')}_F_0000.csv.zip"
+    mon = MONTHS[d.month - 1]
+    return (f"{ARCHIVES}/content/historical/DERIVATIVES/{d.year}/{mon}/"
+            f"fo{d.strftime('%d')}{mon}{d.year}bhav.csv.zip")
+
+
+def fovolt_url(d: date) -> str:
+    """Clearing-house daily volatility file. From April 2011 it also carries the underlying's close."""
+    return f"{ARCHIVES}/archives/nsccl/volt/FOVOLT_{d.strftime('%d%m%Y')}.csv"
+
+
+def _int(v: Optional[str]) -> int:
+    return round(_num(v))
+
+
+def _opt_num(v: Optional[str]) -> Optional[float]:
+    text = (v or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _notional_price(row: dict) -> Optional[float]:
+    """The price turnover is struck on: the futures price, or strike + premium for an option."""
+    price = row["close"] if row["instrument"] == "FUT" else (row["strike"] or 0.0) + row["close"]
+    return price if price > 0 else None
+
+
+def lot_from_turnover(row: dict) -> Optional[int]:
+    """
+    One legacy row's lot size, from its notional turnover: turnover / (price x contracts).
+
+    Turnover is struck at traded prices across the session, not at the close, so a
+    single row is only approximately right. `_fill_legacy_lots` does not trust any
+    one row; this is the per-row building block and a diagnostic.
+    """
+    price = _notional_price(row)
+    if price is None or row["contracts"] <= 0 or row["turnover"] <= 0:
+        return None
+    lot = round(row["turnover"] / (price * row["contracts"]))
+    return lot if lot > 0 else None
+
+
+# The smallest lot revision in NSE's published history is 75 -> 65 (13%). An
+# estimate within LOT_SNAP of a lot the session has already established is noise
+# to round away, never a revision being hidden.
+LOT_SNAP = 0.10
+
+# Traded options an expiry needs before its median may establish a lot that the
+# session's thinner expiries snap to.
+LOT_CONFIDENT_ROWS = 10
+
+
+def _median(values: List[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _fill_legacy_lots(rows: List[dict]) -> None:
+    """
+    Lot size per (symbol, expiry) for legacy files, which do not publish it.
+
+    Each traded row implies a lot, turnover / (price x contracts). Three choices
+    make that usable:
+
+    - **Options, not futures.** An option's notional price is mostly strike, so a
+      volatile session barely moves it. A future's is all price: on 2022-02-24,
+      with NIFTY down ~5%, the most traded future implied 50.78 and rounded to 51.
+    - **The median per expiry**, because a thin far-dated contract can print a
+      close far from where it traded (one 2022 weekly's 18100 PE implied 50.9).
+    - **Per expiry, not per session.** NSE revises lots at expiry boundaries and
+      contracts listed earlier keep their size. From Nov 2014 to Oct 2015 NIFTY's
+      near months traded in lots of 25 while its long-dated options stayed at 50,
+      and open interest agrees: all multiples of 50 on the long-dated contracts,
+      barely half on the near ones.
+
+    An estimate snaps to the nearest lot that a well-traded expiry established
+    the same session, when within LOT_SNAP, and otherwise rounds. Scored against
+    the lot NSE publishes in 2025-26 UDiFF files, 7,191 expiry-sessions, it
+    matches every one. An expiry with no trade that session is left None:
+    `ingest.fno.fill_untraded_lots` carries the contract's own lot to it.
+    """
+    opt: Dict[Tuple[str, date], List[float]] = {}
+    fut: Dict[Tuple[str, date], List[float]] = {}
+    for r in rows:
+        price = _notional_price(r)
+        if price is None or r["contracts"] <= 0 or r["turnover"] <= 0:
+            continue
+        target = opt if r["instrument"] == "OPT" else fut
+        target.setdefault((r["symbol"], r["expiry"]), []).append(r["turnover"] / (price * r["contracts"]))
+
+    estimates: Dict[Tuple[str, date], float] = {}
+    established: Dict[str, List[int]] = {}
+    for key in set(opt) | set(fut):
+        options = opt.get(key, [])
+        est = _median(options or fut[key])
+        estimates[key] = est
+        if len(options) >= LOT_CONFIDENT_ROWS and round(est) > 0:
+            established.setdefault(key[0], []).append(round(est))
+
+    lots: Dict[Tuple[str, date], int] = {}
+    for key, est in estimates.items():
+        known = established.get(key[0], [])
+        nearest: Optional[int] = min(known, key=lambda lot: abs(est - lot)) if known else None
+        if nearest is not None and abs(est - nearest) / nearest <= LOT_SNAP:
+            lots[key] = nearest
+        elif round(est) > 0:
+            lots[key] = round(est)
+
+    for r in rows:
+        r["lot_size"] = lots.get((r["symbol"], r["expiry"]))
+
+
+def _legacy_date(text: Optional[str]) -> date:
+    """Legacy F&O dates are DD-Mon-YYYY, except some 2012 files that write DD-Mon-YY (2012-05-14)."""
+    value = (text or "").strip()
+    for fmt in ("%d-%b-%Y", "%d-%b-%y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised legacy date {value!r}")
+
+
+def parse_fo_bhavcopy(blob: bytes, d: date, symbols: Iterable[str]) -> List[dict]:
+    """Index futures and options for `symbols` from one session's F&O bhavcopy, one row shape for both layouts."""
+    wanted = {s.upper() for s in symbols}
+    udiff = d >= UDIFF_FROM
+    out: List[dict] = []
+    for r in _rows(_csv_from_zip(blob)):
+        if udiff:
+            kind = INDEX_FO_KINDS.get((r.get("fininstrmtp") or "").strip().upper())
+            sym = (r.get("tckrsymb") or "").strip().upper()
+        else:
+            kind = INDEX_FO_KINDS.get((r.get("instrument") or "").strip().upper())
+            sym = (r.get("symbol") or "").strip().upper()
+        if kind is None or sym not in wanted:
+            continue
+
+        row: dict
+        if udiff:
+            expiry = date.fromisoformat((r.get("xprydt") or "").strip())
+            strike = _num(r.get("strkpric"))
+            otype = (r.get("optntp") or "").strip().upper()
+            row = {
+                "open": _num(r.get("opnpric")), "high": _num(r.get("hghpric")),
+                "low": _num(r.get("lwpric")), "close": _num(r.get("clspric")),
+                "settle": _num(r.get("sttlmpric")), "prev_close": _opt_num(r.get("prvsclsgpric")),
+                "underlying": _opt_num(r.get("undrlygpric")),
+                "contracts": _int(r.get("ttltradgvol")), "oi": _int(r.get("opnintrst")),
+                "chg_oi": _int(r.get("chnginopnintrst")), "turnover": _num(r.get("ttltrfval")),
+                "trades": _int(r.get("ttlnboftxsexctd")), "lot_size": _int(r.get("newbrdlotqty")) or None,
+            }
+        else:
+            expiry = _legacy_date(r.get("expiry_dt"))
+            strike = _num(r.get("strike_pr"))
+            otype = (r.get("option_typ") or "").strip().upper()
+            row = {
+                "open": _num(r.get("open")), "high": _num(r.get("high")),
+                "low": _num(r.get("low")), "close": _num(r.get("close")),
+                "settle": _num(r.get("settle_pr")), "prev_close": None, "underlying": None,
+                "contracts": _int(r.get("contracts")), "oi": _int(r.get("open_int")),
+                "chg_oi": _int(r.get("chg_in_oi")), "turnover": _num(r.get("val_inlakh")) * 1e5,
+                "trades": None, "lot_size": None,
+            }
+
+        is_option = kind == "OPT"
+        if is_option and otype not in ("CE", "PE"):
+            continue
+        row.update(symbol=sym, date=d, instrument=kind, expiry=expiry,
+                   strike=strike if is_option else None,
+                   option_type=otype if is_option else None)
+        out.append(row)
+
+    if not udiff:
+        _fill_legacy_lots(out)
+    return out
+
+
+def fo_market_activity_url(d: date) -> str:
+    """
+    The F&O Market Activity Report, a second publication of the session's contracts.
+
+    NSE has no F&O bhavcopy at all for a few sessions that did trade, 2013-10-09
+    and 2021-03-30 among them, but it does publish this zip for them.
+    """
+    return f"{ARCHIVES}/archives/fo/mkt/fo{d.strftime('%d%m%Y')}.zip"
+
+
+def parse_fo_market_activity(blob: bytes, d: date, symbols: Iterable[str]) -> List[dict]:
+    """
+    Index futures and options from the Market Activity zip, in the bhavcopy row shape.
+
+    Contracts come from its foDDMMYYYY.csv (futures) and opDDMMYYYY.csv (options).
+    It lists traded contracts only, so a session parsed from here has no untraded
+    strikes. In exchange it carries traded quantity beside contracts, which gives
+    the lot size exactly. On 2013-10-08, when both publications exist, all 199
+    traded NIFTY options agree with the bhavcopy on close and open interest.
+
+    Numbers are zero-padded ("00005700.00"), dates are DD/MM/YYYY, and there is no
+    settlement price or change in open interest: `settle` takes the close and
+    `chg_oi` is None.
+    """
+    wanted = {s.upper() for s in symbols}
+    stamp = d.strftime("%d%m%Y")
+    out: List[dict] = []
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        members = {name.lower(): name for name in zf.namelist()}
+        for member, kind, instrument in ((f"fo{stamp}.csv", "FUT", "FUTIDX"), (f"op{stamp}.csv", "OPT", "OPTIDX")):
+            if member not in members:
+                continue
+            for raw in _rows(zf.read(members[member]).decode("utf8", errors="replace")):
+                r = {k: (v.strip() if isinstance(v, str) else v) for k, v in raw.items()}
+                sym = (r.get("symbol") or "").upper()
+                if (r.get("instrument") or "").upper() != instrument or sym not in wanted:
+                    continue
+                otype = (r.get("opt_type") or "").upper() if kind == "OPT" else None
+                if kind == "OPT" and otype not in ("CE", "PE"):
+                    continue
+                contracts, qty = _int(r.get("no_of_cont")), _int(r.get("trd_qty"))
+                close = _num(r.get("close_price"))
+                out.append({
+                    "symbol": sym, "date": d, "instrument": kind,
+                    "expiry": datetime.strptime(r.get("exp_date") or "", "%d/%m/%Y").date(),
+                    "strike": _num(r.get("str_price")) if kind == "OPT" else None,
+                    "option_type": otype,
+                    "open": _num(r.get("open_price")), "high": _num(r.get("hi_price")),
+                    "low": _num(r.get("lo_price")), "close": close, "settle": close,
+                    "prev_close": None, "underlying": None,
+                    "contracts": contracts, "oi": _int(r.get("open_int*")), "chg_oi": None,
+                    "turnover": _num(r.get("notion_val") if kind == "OPT" else r.get("trd_val")),
+                    "trades": _int(r.get("no_of_trade")),
+                    "lot_size": qty // contracts if contracts and qty % contracts == 0 else None,
+                })
+    return out
+
+
+def parse_fovolt(blob: bytes, d: date, symbols: Iterable[str]) -> List[dict]:
+    """
+    Underlying closes from the clearing-house volatility file.
+
+    Fields are positional because the header wording has drifted over the years:
+    0 date, 1 symbol, 2 underlying close, 3 previous close, 7 underlying
+    annualised volatility, 8 futures close. Files before April 2011 have eight
+    fields and no prices at all; they yield nothing.
+    """
+    wanted = {s.upper() for s in symbols}
+    out: List[dict] = []
+    reader = csv.reader(io.StringIO(blob.decode("utf8", errors="replace")))
+    next(reader, None)
+    for fields in reader:
+        f = [x.strip() for x in fields]
+        if len(f) < 9 or f[1].upper() not in wanted:
+            continue
+        close = _num(f[2])
+        if close <= 0:
+            continue
+        out.append({
+            "symbol": f[1].upper(), "date": d, "close": close,
+            "prev_close": _opt_num(f[3]), "underlying_vol": _opt_num(f[7]),
+            "futures_close": _opt_num(f[8]), "source": "fovolt",
+        })
+    return out
+
+
+def near_future_close(rows: List[dict], symbol: str, d: date) -> Optional[dict]:
+    """Spot stand-in when FOVOLT has no price: the nearest unexpired future's close."""
+    futs = [r for r in rows if r["symbol"] == symbol and r["instrument"] == "FUT"
+            and r["expiry"] >= d and r["close"] > 0]
+    if not futs:
+        return None
+    near = min(futs, key=lambda r: r["expiry"])
+    return {"symbol": symbol, "date": d, "close": near["close"], "prev_close": None,
+            "underlying_vol": None, "futures_close": near["close"], "source": "near_future"}
+

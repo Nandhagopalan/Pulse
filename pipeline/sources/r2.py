@@ -39,9 +39,9 @@ def s3():
     )
 
 
-def object_exists(key: str) -> bool:
+def object_exists(key: str, bucket: str = "") -> bool:
     try:
-        s3().head_object(Bucket=config.r2_bucket, Key=key)
+        s3().head_object(Bucket=bucket or config.r2_bucket, Key=key)
         return True
     except ClientError as err:
         if err.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
@@ -49,23 +49,24 @@ def object_exists(key: str) -> bool:
         raise
 
 
-def put_object(key: str, blob: bytes, content_type: str = "application/octet-stream") -> None:
-    s3().put_object(Bucket=config.r2_bucket, Key=key, Body=blob, ContentType=content_type)
+def put_object(key: str, blob: bytes, content_type: str = "application/octet-stream",
+               bucket: str = "") -> None:
+    s3().put_object(Bucket=bucket or config.r2_bucket, Key=key, Body=blob, ContentType=content_type)
 
 
-def get_object(key: str) -> Optional[bytes]:
+def get_object(key: str, bucket: str = "") -> Optional[bytes]:
     try:
-        return s3().get_object(Bucket=config.r2_bucket, Key=key)["Body"].read()
+        return s3().get_object(Bucket=bucket or config.r2_bucket, Key=key)["Body"].read()
     except ClientError as err:
         if err.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
             return None
         raise
 
 
-def list_keys(prefix: str) -> List[str]:
+def list_keys(prefix: str, bucket: str = "") -> List[str]:
     keys: List[str] = []
     paginator = s3().get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=config.r2_bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=bucket or config.r2_bucket, Prefix=prefix):
         keys.extend(obj["Key"] for obj in page.get("Contents", []))
     return keys
 
@@ -99,12 +100,13 @@ def duck(memory_limit: str = "4GB", threads: Optional[int] = None) -> duckdb.Duc
     return con
 
 
-def preflight() -> None:
+def preflight(bucket: str = "") -> None:
     """Fail fast with an actionable message before a long job starts."""
+    name = bucket or config.r2_bucket
     try:
-        s3().head_bucket(Bucket=config.r2_bucket)
+        s3().head_bucket(Bucket=name)
     except ClientError as err:
         raise RuntimeError(
-            f"cannot reach R2 bucket '{config.r2_bucket}': {err}. "
+            f"cannot reach R2 bucket '{name}': {err}. "
             "Check R2_BUCKET_NAME and that the API token grants Object Read & Write on it."
         ) from err

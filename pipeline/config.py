@@ -58,6 +58,11 @@ class Config:
     # need chunking and is far slower for this shape of write.
     supabase_db_url = env("SUPABASE_DB_URL") or env("DATABASE_URL")
 
+    # ── Index derivatives lake ───────────────────────────────────────────────
+    # A separate bucket from the terminal's, and deliberately without a default:
+    # an unset name must fail, never fall back to writing into pulse-terminal.
+    fno_bucket = env("FNO_R2_BUCKET")
+
     # ── Ingestion window ─────────────────────────────────────────────────────
     history_start = env("HISTORY_START", "2007-01-01")
     nse_delay = float(env("NSE_DELAY", "0.15"))
@@ -91,6 +96,19 @@ class Config:
             "alone cannot authenticate against the S3 API."
         )
 
+    def require_fno_bucket(self, override: str = "") -> str:
+        bucket = override or self.fno_bucket
+        if not bucket:
+            raise RuntimeError(
+                "No F&O bucket named. Pass --bucket NAME or set FNO_R2_BUCKET in .env.local. "
+                "There is no default on purpose: this data must not land in the terminal's bucket."
+            )
+        if bucket == self.r2_bucket:
+            raise RuntimeError(
+                f"FNO bucket '{bucket}' is the terminal's own bucket; the F&O lake is kept separate."
+            )
+        return bucket
+
     def require_supabase(self) -> str:
         if not self.supabase_db_url:
             raise RuntimeError(
@@ -117,6 +135,13 @@ CURATED_INDEX = "curated/index_daily"
 CURATED_ACTIONS = "curated/corporate_actions"
 CURATED_INSTRUMENTS = "curated/instruments"
 
+# F&O bucket layout (FNO_R2_BUCKET), mirroring the terminal's raw/curated split.
+RAW_FO_BHAV_PREFIX = "raw/nse/fo_bhavcopy"
+RAW_FOVOLT_PREFIX = "raw/nse/fovolt"
+RAW_FO_MARKET_ACTIVITY_PREFIX = "raw/nse/fo_market_activity"
+CURATED_FNO_CONTRACTS = "curated/index_fno_daily"
+CURATED_FNO_UNDERLYING = "curated/index_underlying_daily"
 
-def s3_uri(key: str) -> str:
-    return f"s3://{config.r2_bucket}/{key}"
+
+def s3_uri(key: str, bucket: str = "") -> str:
+    return f"s3://{bucket or config.r2_bucket}/{key}"

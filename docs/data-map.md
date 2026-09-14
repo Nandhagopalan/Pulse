@@ -144,6 +144,77 @@ sectors plus a legacy map for NSE's pre-2018 names.
 
 ---
 
+### 1.3 The F&O bucket — `FNO_R2_BUCKET`
+
+Index futures and options sit in a **separate bucket**, `pulse-terminal-fno`,
+written only by [`pipeline/ingest/fno.py`](../pipeline/ingest/fno.py).
+`config.require_fno_bucket` refuses an unset name and refuses the terminal's
+bucket, so this data cannot land in `pulse-terminal` by accident. Nothing in the
+request path reads it; it exists for option-strategy research.
+
+| Key | Source | Written by |
+| --- | --- | --- |
+| `raw/nse/fo_bhavcopy/YYYY/YYYY-MM-DD.zip` | `nsearchives.nseindia.com` — UDiFF `BhavCopy_NSE_FO_*.csv.zip` from 2024, legacy `foDDMONYYYYbhav.csv.zip` before it. Every F&O contract, kept whole so another index can be curated without refetching. | `ingest/fno.py` |
+| `raw/nse/fovolt/YYYY/YYYY-MM-DD.csv` | `FOVOLT_DDMMYYYY.csv`, the clearing house's daily volatility file | `ingest/fno.py` |
+| `raw/nse/fo_market_activity/YYYY/YYYY-MM-DD.zip` | `archives/fo/mkt/foDDMMYYYY.zip`, the F&O Market Activity Report. Fetched only when a session has no bhavcopy: NSE published none for 2013-10-09 and 2021-03-30, which traded. It lists traded contracts only, has no settlement price or change in OI, and gives the lot size exactly (quantity ÷ contracts). On a day both exist, every traded NIFTY option agrees with the bhavcopy on close and OI. | `ingest/fno.py` |
+
+#### `curated/index_fno_daily/year=YYYY/data.parquet` — index futures and options
+
+One row per contract per session for the requested index symbols (default
+`NIFTY`, `BANKNIFTY`): every strike and expiry, traded or not. Sorted by date,
+symbol, expiry, instrument, strike, option type.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `symbol` | string | `NIFTY`, `BANKNIFTY`, … |
+| `date` | date32 | session |
+| `instrument` | string | `FUT` or `OPT` |
+| `expiry` | date32 | contract expiry |
+| `strike` | float64 | null for futures |
+| `option_type` | string | `CE` / `PE`, null for futures |
+| `open` `high` `low` | float64 | zero when untraded |
+| `close` | float64 | **the price to use** — carries the settlement value on strikes that did not trade |
+| `settle` | float64 | as published. Legacy option rows are unreliable here (2023 files carry the underlying), so don't price options off it |
+| `prev_close` | float64 | UDiFF (2024→) only |
+| `underlying` | float64 | UDiFF only; equals FOVOLT's close exactly |
+| `contracts` | int64 | volume, **in contracts** |
+| `oi` / `chg_oi` | int64 | open interest, **in units** (contracts × lot) |
+| `turnover` | float64 | rupees, notional — (strike + premium) × units for an option |
+| `trades` | int64 | UDiFF only |
+| `lot_size` | int64 | published from 2024. Before that, recovered from turnover: the median implied lot of each expiry's traded options, snapped to the nearest lot a well-traded expiry established that session when within 10%. Untraded days take the same contract's lot from its nearest traded session. Scored against the 7,191 lots NSE published in 2025-26 it matches every one. Lots are genuinely per expiry: from Nov 2014 to Oct 2015 NIFTY's near months traded in 25s while long-dated options kept 50 |
+
+#### `curated/index_underlying_daily/year=YYYY/data.parquet` — spot per session
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `symbol`, `date` | string, date32 | |
+| `close` / `prev_close` | float64 | the index's close (and previous close) |
+| `underlying_vol` | float64 | annualised volatility, from FOVOLT |
+| `futures_close` | float64 | near-month future's close |
+| `source` | string | `fovolt`, or `near_future` when FOVOLT carried no price (files before late March 2011 have none) and `close` is the nearest unexpired future's close |
+
+**Price options only where they traded.** An untraded strike's `close` is
+NSE's settlement value, not a trade, and in a fast market it can be far off. On
+NIFTY monthly expiries 30–60 days out, strikes within 3% of the future, put-call
+parity misses by a median 1.84% of the future when a leg did not trade (95th
+percentile 8.9%) against 0.034% when both did. How often the relevant strikes go
+untraded varies a lot by year: at-the-money monthly calls 30–60 days out went
+untraded 20–36% of sessions in 2014–2020 and under 8% since 2021, while a traded
+call within 1% of spot existed on all but a handful of sessions. Nearer expiry
+(10–30 days) nearly everything trades. Filter on `contracts > 0`.
+
+**Open interest is not always a multiple of the current lot.** After NSE raises
+a lot, positions opened in the old size stay open: NIFTY OI in 2016 is a multiple
+of the new lot of 75 on only 75% of rows, and on every one of the rest it is a
+multiple of 25. `lot_size` is the lot new trades carry, which turnover confirms.
+
+Whole-lake checks (2011–2022, 2024–2026): every session has spot for both
+indices; at-the-money parity against the near future holds to a median of
+1–5 points on NIFTY and 3–9 on BANKNIFTY every year, with no pair over 1% once
+both legs traded at least 100 contracts; the near future trades a median
+0.06–0.34% over spot; and no row has a negative price, volume or open interest,
+a missing strike, or an expiry before its session.
+
 ## 2. Supabase Postgres — the hot state
 
 Schema: [`supabase/migrations/`](../supabase/migrations), applied with

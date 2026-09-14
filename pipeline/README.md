@@ -26,7 +26,8 @@ pipeline/
 ├── ingest/                outside world → curated Parquet, all idempotent
 │   ├── backfill.py        session bars, resumable, 2007 → today
 │   ├── reference.py       index constituents and the sector map
-│   └── corporate_actions.py  splits and bonuses → adjustment factors
+│   ├── corporate_actions.py  splits and bonuses → adjustment factors
+│   └── fno.py             index futures + options → the separate F&O bucket
 ├── compute/               curated lake → the published snapshot
 │   ├── analytics.py       one DuckDB pass → breadth, sectors, per-symbol metrics
 │   └── publish.py         the only writer to Supabase
@@ -88,6 +89,9 @@ uv run python -m pipeline eod               # the nightly chain (what CI runs)
 uv run python -m pipeline verify RELIANCE   # audit one symbol end to end
 uv run python -m pipeline audit             # scan every symbol for unapplied actions
 uv run python -m pipeline summary           # what the lake currently holds
+uv run python -m pipeline fno --start 2011-01-01 --end 2022-12-31 --bucket pulse-terminal-fno
+                                            # index F&O → the separate F&O bucket (resumable)
+uv run python -m pipeline fno --summary --bucket pulse-terminal-fno   # what that bucket holds
 ```
 
 The backfill is safe to interrupt and re-run: raw vendor files already in R2 are
@@ -110,6 +114,25 @@ curated/index_daily/year=YYYY/data.parquet
 curated/corporate_actions/actions.parquet
 curated/instruments/constituents.parquet
 ```
+
+Index futures and options live in a **separate bucket**, `FNO_R2_BUCKET`
+(`pulse-terminal-fno`), with the same raw/curated split:
+
+```
+raw/nse/fo_bhavcopy/YYYY/YYYY-MM-DD.zip                 every F&O contract, vendor bytes
+raw/nse/fovolt/YYYY/YYYY-MM-DD.csv                      clearing-house volatility file (carries spot)
+raw/nse/fo_market_activity/YYYY/YYYY-MM-DD.zip         only for sessions NSE published no bhavcopy for
+curated/index_fno_daily/year=YYYY/data.parquet          index futures + options, every strike and expiry
+curated/index_underlying_daily/year=YYYY/data.parquet   one spot close per index per session
+```
+
+`fno` has no default bucket and refuses the terminal's, so this data cannot land
+in `pulse-terminal` by accident. Units are as NSE publishes them in both layouts —
+volume in contracts, open interest in units — and the legacy file's missing lot
+size is recovered from notional turnover. Spot comes from FOVOLT, which carries
+prices from late March 2011; sessions before that use the nearest future's close
+and say so in `source`. Column-level detail is in
+[docs/data-map.md §1.3](../docs/data-map.md).
 
 The raw layer exists so every derived dataset can be rebuilt without asking NSE
 again — their archives rate-limit hard, block datacenter IPs, and have retired
@@ -220,6 +243,7 @@ is how CI injects secrets.
 | `R2_BUCKET_NAME` | bucket (default `pulse-terminal`) |
 | `R2_KEY_ID` / `R2_SECRET_KEY` | R2 **S3 API** token pair — `R2_TOKEN_VALUE` alone will not authenticate |
 | `SUPABASE_DB_URL` | Postgres URI (Session pooler) — needed only by `publish` |
+| `FNO_R2_BUCKET` | bucket for index F&O data (`pulse-terminal-fno`); no default, never the terminal's bucket — needed only by `fno`, or pass `--bucket` |
 | `HISTORY_START` | backfill floor, default `2007-01-01` |
 | `NSE_DELAY` | seconds between archive requests, default `0.15` |
 
