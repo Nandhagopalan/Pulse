@@ -11,6 +11,7 @@ Deeper references, in the order you will usually want them:
 | [docs/architecture.md](docs/architecture.md) | How the system is built and deployed, and why each decision went the way it did |
 | [docs/strategy-engine.md](docs/strategy-engine.md) | The rules-based swing engine, its parameters and its paper book |
 | [docs/nifty-options-strategies.md](docs/nifty-options-strategies.md) | NIFTY options strategy playbook: each strategy as simulable rules and adjustments, with the data and simulation readiness each needs |
+| [docs/covered-call-backtest.md](docs/covered-call-backtest.md) | NIFTYBEES covered call: 5,376 variants tested on 2011–22 and 2024–26, the rules of the one that held up, and why a butterfly is the wrong hedge |
 | [pipeline/README.md](pipeline/README.md) | The pipeline in its own words — commands, corporate actions, the audit |
 | [server/README.md](server/README.md) | The Node backend |
 

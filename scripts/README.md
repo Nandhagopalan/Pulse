@@ -34,6 +34,7 @@ uv run python -m scripts.walkforward
 | `PULSE_INDEX` | `benchmarks.py`, `ladder.py` | index bars, for the comparison series |
 | `PULSE_RUNG` / `PULSE_RUNGS` | `rung.py`, `ladder.py` | which deployment rung to detail |
 | `PULSE_COMMON` | `check_winners.py` | shared-position overlap input |
+| `FNO_MIRROR` | `covered_call.py` | the local option-chain mirror its `extract` step writes from the F&O bucket |
 
 ## `walkforward.py` is the harness
 
@@ -87,6 +88,17 @@ was too good to accept.
 | `rung.py` | Everything about one rung of the ladder, in the form the year table takes |
 | `holdout3y.py` | A three-year holdout: train to 2023, then face 2024, 2025 and 2026 cold |
 | `benchmarks.py` | The book against the indices a swing trader would otherwise have bought |
+
+### 4. Options — the covered call
+
+A separate study with its own data, so it does not use the `walkforward.py`
+harness. It reads NIFTY monthly options from the F&O bucket and splits time its
+own way: calibrate on 2011–2022, test on 2024–2026. Its findings are in
+[docs/covered-call-backtest.md](../docs/covered-call-backtest.md).
+
+| Script | The question it answers |
+| --- | --- |
+| `covered_call.py` | Which covered call on NIFTYBEES — strike, expiry, exit, adjustments, coverage, hedge — holds up out of sample, and is a butterfly the right hedge? (`extract`, `smoke`, `sweep`, `analyse`) |
 
 ## Adding one
 
