@@ -184,6 +184,32 @@ All of:
 
 Candidates are ranked by relative strength; the strongest fill first.
 
+**Fill rate — `max_new_per_session`.** How many of those candidates may actually
+be *opened* in one session. 0 is off and fills every free slot from a single
+session's list, which is what the `balanced`, `conservative`, `aggressive` and
+`deployed` presets do. `paced` sets it to 2.
+
+It exists because the regime switch closes the whole book at once, so the
+session after every turn spent all twelve slots on one morning's breakouts and
+the next turn sold them. In 2022 the switch flipped twelve times and 72 of 85
+exits were regime exits, for +3.7% on a year whose universe had a quarter of its
+names up more than 20%. Filling two a session assembles the book over ~6
+sessions out of six ranked lists instead of one: 2022 becomes +15.0% and the
+full record 16.68% → 18.78% CAGR at a shallower drawdown.
+
+What makes it a rule rather than a fitted constant is the control: filling two
+*at random* each session is **worse** than no cap at all (12.5–16.3% CAGR across
+three seeds). The cap pays only because what survives it is the strongest signal
+of each session — pacing and selection are both load-bearing. Every value from 2
+to 6 lands in the same band, and the value was chosen on 2008–2021 alone, so
+neither 2022 nor the held-out years selected it. The cost is concentrated in
+sharp V-recoveries, where rebuilding a book over six sessions gives up real
+ground. `scripts/entry_pacing.py` reproduces all of it.
+
+Only the *queue* is capped. Every candidate is still returned and recorded in
+`strategy_signals`, marked pending or skipped, so the table keeps saying what the
+rules saw rather than only what the book could afford.
+
 ### 2.4 Exit — whichever comes first
 
 - **Stop:** 3.0 × ATR(14) below entry, judged **on the close**. If the close is at
@@ -229,6 +255,51 @@ stop is reached. **Size for "typical 1R, occasionally 2R, once-a-decade 7R".**
 - Buy 0.147%, sell 0.137% — brokerage, STT, exchange, stamp, GST
 - 0.20% slippage per side
 - Round trip ≈ 0.68%
+
+### 2.8 The losing years, and why nothing was done about them
+
+The book's return lives entirely in long regime episodes. Of 88 ON episodes in
+the record, the 26 lasting 21+ sessions compounded **+3,186%** at an 83% win
+rate; every shorter bucket lost money (1–2 sessions −8.4%, 3–5 −5.5%, 6–10
+−14.6%, 11–20 +0.7%). Since 62 of the 88 are short, the obvious idea is to stop
+taking them — and it does not work, because **an episode's length is close to
+unpredictable at its start**. The base rate of reaching 21+ sessions is 30%; the
+best filter found lifts that to 48% while discarding 58% of the long episodes,
+and volatility and MA-slope filters have no lift at all (≈1.0×).
+
+The two weak years fail differently, and neither is what it looks like:
+
+| | Equal-weight index | Book | Where the loss came from |
+| --- | --- | --- | --- |
+| 2015 | +0.2% | −5.2% | −6.1% while holding (the August crash); frictions 3.37% of equity across 18 regime flips |
+| 2018 | −15.3% | −6.6% | −4.9% on six exit days, −3.9% of it on 5 Feb alone; quiet holding −0.21% |
+
+**2018 beat the market by 8.7 points**, and almost all of its loss is one
+morning — the whole book liquidating into a single gapped-down open, which an
+end-of-day system cannot avoid. 2015 is the genuine underperformance.
+
+Tested against both years and **rejected**: entry confirmation at 3/5/8/13/21 ON
+sessions (makes *both* worse — 2015 −15.1% and 2018 −11.1% at three sessions,
+because it still gets caught and also misses the recovery), an index-volatility
+entry filter (the spike arrives after entry), requiring the 100-day average to
+be rising (2018 −9.9%), `stop_atr` 2.0/2.5/4.0, staggering the regime exit over
+two or three sessions (2018 −7.9%), and a drawdown circuit breaker.
+
+One change does fix 2015: refusing entries when the regime has flipped more than
+twice in 20 sessions takes it to **+1.5%**, cuts losing years from 5 to 3 and
+max drawdown to −21.08%. It is not in the engine, and the reason is the whole
+lesson of §1.2:
+
+> It **won** the training selection — train calmar 0.87 on 2008–2023, the best
+> of everything tested, against 0.76 for the unchanged book — and then returned
+> 18.64% annualised over the held-out 2024–26 against the unchanged book's
+> **23.16%**. Adopting the training winner would have cost 4.5 points a year.
+
+That is the −0.152 rank inversion reproduced on a fresh question. If a shallower
+drawdown is ever wanted more than return, the filter is the honest lever and it
+is a **risk-appetite choice, not an improvement**. Re-running this search should
+not be expected to produce a different answer; `scripts/entry_pacing.py` holds
+the harness the variants were run through.
 
 ---
 
@@ -287,6 +358,15 @@ class StrategyConfig:
 | `conservative` | 0.40% | 10 | 10.6% | −6.2% |
 | `balanced` *(default)* | 0.60% | 12 | 14.4% | −12.3% |
 | `aggressive` | equal-weight 8.3% | 12 | 19.7% | −19.5% |
+| `deployed` | 0.80% | 12 | 17.0% | −24.7% |
+| `paced` | 0.80% | 12 | 18.8% | −23.9% |
+
+The first three assume 5% on idle cash, which at their deployment is a large
+part of what they return. `deployed` and `paced` assume **nothing** on cash and
+earn from the market instead — read them as a different instrument rather than
+as points on one curve. `paced` is `deployed` plus `max_new_per_session = 2`
+(§2.3) and nothing else; it is kept separate so `tests/test_backtest_fidelity.py`
+goes on pinning whichever book is actually being traded.
 
 Rules for keeping this honest as it evolves:
 

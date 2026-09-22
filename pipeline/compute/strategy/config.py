@@ -140,6 +140,26 @@ class StrategyConfig:
     # which is what separates a weekly stop from a noisy daily one. None = off.
     weekly_ema_exit: Optional[int] = None
 
+    # Ceiling on how many positions may be *opened* in one session. 0 disables
+    # it, which fills every free slot from a single session's ranked list.
+    #
+    # That default is what made a sideways year expensive. The regime switch
+    # closes the whole book at once, so the session after every turn bought a
+    # full twelve names off one morning's breakouts and the next turn sold them
+    # — in 2022 the switch flipped twelve times and 72 of 85 exits were regime
+    # exits, for +3.7% on the year. Filling two a session lets the book
+    # assemble over ~6 sessions out of six ranked lists instead of one, and
+    # takes 2022 to +15.0% with full-record CAGR 16.68% -> 18.78% at a
+    # shallower drawdown.
+    #
+    # It is not "trade less": filling two *at random* each session is worse
+    # than no cap at all. The cap works because what survives it is the
+    # strongest signal of each session. Selected on 2008-2021 alone, so neither
+    # 2022 nor the held-out years chose it; every value from 2 to 6 improves
+    # the record. The cost is concentrated in sharp V-recoveries — 2020 and
+    # 2023 each give up ~19 points. See scripts/entry_pacing.py.
+    max_new_per_session: int = 0
+
     # ── sizing ──────────────────────────────────────────────────────────────
     risk_pct: float = 0.0060           # of current book equity, per trade
     max_positions: int = 12
@@ -231,6 +251,25 @@ PRESETS: Dict[str, StrategyConfig] = {
         weekly_ema_exit=20, time_stop=None,
         cash_yield=0.0, max_per_group=1,
         sector_top_frac=0.0, max_per_sector=0, require_sector_label=False,
+    ),
+    # 18.78% CAGR, -23.86% max drawdown, 5 losing years, 0% on idle cash —
+    # `deployed` with the per-session fill cap and nothing else changed.
+    #
+    # The same book that returned +3.7% in 2022 returns +15.0%, and the three
+    # held-out years improve with it: 2024 +14.3% -> +17.8%, 2025 +9.0% ->
+    # +11.8%, 2026 +29.3% -> +33.9%. Drawdown comes in shallower than
+    # `deployed`, on 20% fewer trades held 15 sessions instead of 11.
+    #
+    # Kept as a separate preset rather than folded into `deployed` so the
+    # fidelity test keeps pinning the book that is actually being traded. A
+    # book only moves here by an explicit `pipeline strategy --set-preset`.
+    "paced": StrategyConfig(
+        name="paced",
+        risk_pct=0.0080, max_positions=12, max_weight=0.125,
+        weekly_ema_exit=20, time_stop=None,
+        cash_yield=0.0, max_per_group=1,
+        sector_top_frac=0.0, max_per_sector=0, require_sector_label=False,
+        max_new_per_session=2,
     ),
 }
 

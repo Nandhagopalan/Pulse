@@ -249,7 +249,12 @@ def advance(state: BookState, data: MarketData, feats: Features, cfg: StrategyCo
     elif free > 0:
         candidates = rules.entry_candidates(
             data, feats, cfg, t, exclude=list(state.positions))
-        state.pending_entries = candidates[:free]
+        # Every candidate is still returned — and recorded by the caller. Only
+        # the queue is capped, so a session's weaker signals are on the record
+        # as skipped rather than filled behind the day's strongest.
+        room = free if cfg.max_new_per_session <= 0 else min(
+            free, cfg.max_new_per_session)
+        state.pending_entries = candidates[:room]
 
     equity = state.cash + state.market_value(c[t])
     # Time-weighted: the flow must not read as performance. Settled at the start

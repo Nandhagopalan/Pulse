@@ -99,7 +99,8 @@ def retune(book_id: str, preset_name: str, wipe: bool = False,
     print(f"[strategy] {book_id}: {old.name!r} -> {cfg.name!r}, config v{version}")
     for f in ("risk_pct", "max_positions", "max_weight", "weekly_ema_exit",
               "time_stop", "cash_yield", "max_per_group", "sector_top_frac",
-              "max_per_sector", "require_sector_label", "regime_ma", "stop_atr"):
+              "max_per_sector", "require_sector_label", "regime_ma", "stop_atr",
+              "max_new_per_session"):
         a, b = getattr(old, f), getattr(cfg, f)
         if a != b:
             print(f"           {f}: {a} -> {b}")

@@ -88,6 +88,7 @@ was too good to accept.
 | `rung.py` | Everything about one rung of the ladder, in the form the year table takes |
 | `holdout3y.py` | A three-year holdout: train to 2023, then face 2024, 2025 and 2026 cold |
 | `benchmarks.py` | The book against the indices a swing trader would otherwise have bought |
+| `entry_pacing.py` | Why a sideways year was flat, and what capping fills per session does — the evidence for `max_new_per_session` |
 
 ### 4. Options — the covered call
 
