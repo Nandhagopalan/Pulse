@@ -90,7 +90,7 @@ was too good to accept.
 | `benchmarks.py` | The book against the indices a swing trader would otherwise have bought |
 | `entry_pacing.py` | Why a sideways year was flat, and what capping fills per session does — the evidence for `max_new_per_session` |
 
-### 4. Options — the covered call
+### 4. Options
 
 A separate study with its own data, so it does not use the `walkforward.py`
 harness. It reads NIFTY monthly options from the F&O bucket and splits time its
@@ -100,6 +100,7 @@ own way: calibrate on 2011–2022, test on 2024–2026. Its findings are in
 | Script | The question it answers |
 | --- | --- |
 | `covered_call.py` | Which covered call on NIFTYBEES — strike, expiry, exit, adjustments, coverage, hedge — holds up out of sample, and is a butterfly the right hedge? (`extract`, `smoke`, `sweep`, `analyse`) |
+| `swing_options.py` | Does carrying the swing book's F&O-eligible trades in stock calls or call spreads, instead of shares, improve it? No — [docs/swing-options-backtest.md](../docs/swing-options-backtest.md) (`extract`, `trades`, `smoke`, `sweep`, `analyse`) |
 
 ## Adding one
 
