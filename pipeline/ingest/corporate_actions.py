@@ -80,6 +80,7 @@ EX_DATE_SLACK = 7
 
 SCHEMA = pa.schema([
     ("symbol", pa.string()),
+    ("isin", pa.string()),         # the company, when the symbol is not stable
     ("ex_date", pa.date32()),
     ("factor", pa.float64()),
     ("kind", pa.string()),          # bonus | split | bonus+split
@@ -87,6 +88,7 @@ SCHEMA = pa.schema([
     ("implied", pa.float64()),      # ratio the tape actually showed
     ("subject", pa.string()),       # raw label, kept for audit
     ("source_ex_date", pa.date32()),
+    ("filed_as", pa.string()),     # the feed's symbol, when it is not `symbol`
     ("applied", pa.bool_()),
 ])
 
@@ -247,6 +249,59 @@ WHERE prev_close IS NOT NULL
 """
 
 
+# ── Symbol drift ─────────────────────────────────────────────────────────────
+# NSE re-keys a company's *whole* filing history to whatever symbol it trades
+# under today. The bars do not move with it: they keep the symbol of the session
+# they were printed in. So the moment a company is renamed, its past filings
+# stop pointing at the bars they re-base.
+#
+# HEG is the case that surfaced it. HEG Limited became HEG Advanced Materials
+# (HEGAM) on 2026-09-22 with its ISIN unchanged, and its 2026-09-07 demerger —
+# a 62% re-basing — arrived filed as HEGAM while the bars that fell said HEG.
+# Nothing joined, so the audit reported a cliff with no action behind it and
+# failed the nightly run. Where the action is a split or a bonus rather than a
+# demerger the same miss is silent and worse: it verifies as `no_bars` and is
+# never applied, which is how MINDAIND's 1:1 bonus and seven others sit
+# unadjusted in the lake today.
+#
+# ISIN is the stable key and the feed carries it on every row, so resolve
+# through it. Deliberately narrow: a filing is only moved when its own symbol
+# had no bars at the ex-date and exactly one other symbol sharing its ISIN did.
+# An ambiguous case is left exactly where the feed put it, because a wrong
+# re-key would apply someone else's split to this company's history.
+ISIN_SPAN_SQL = """
+SELECT isin, symbol, min(date) AS first_date, max(date) AS last_date
+FROM read_parquet('{daily_glob}')
+WHERE isin IS NOT NULL AND isin <> ''
+GROUP BY isin, symbol
+"""
+
+
+def isin_spans(con: "duckdb.DuckDBPyConnection", daily_glob: str) -> Dict[str, List[Tuple[str, date, date]]]:
+    """Every symbol each ISIN has traded under, with the dates it did."""
+    spans: Dict[str, List[Tuple[str, date, date]]] = {}
+    for isin, sym, first, last in con.execute(
+            ISIN_SPAN_SQL.format(daily_glob=daily_glob)).fetchall():
+        spans.setdefault(isin, []).append((sym, first, last))
+    return spans
+
+
+def resolve_symbol(sym: str, isin: str, ex: date,
+                   spans: Dict[str, List[Tuple[str, date, date]]]) -> str:
+    """The symbol the tape used for this company on this ex-date."""
+    if not isin:
+        return sym
+    cands = spans.get(isin)
+    if not cands:
+        return sym
+    # The feed's own symbol wins whenever it was trading then, so a filing that
+    # already points at the right bars is never second-guessed.
+    if any(s == sym and first <= ex <= last for s, first, last in cands):
+        return sym
+    others = [s for s, first, last in cands if s != sym and first <= ex <= last]
+    return others[0] if len(others) == 1 else sym
+
+
 def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
           start_year: Optional[int] = None,
           end_year: Optional[int] = None,
@@ -271,6 +326,10 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
         for lst in gap_by_symbol.values():
             lst.sort()
 
+        # Which symbol each company's bars carried, and when — so a filing that
+        # arrives under a renamed symbol still finds the tape it re-bases.
+        spans = isin_spans(con, s3_uri(f"{CURATED_DAILY}/*/data.parquet"))
+
         # Parse every filing into the *event* it belongs to, where an event is
         # one symbol on one ex-date. A bonus and a face-value split declared
         # effective the same day are filed as two separate rows and their
@@ -285,6 +344,10 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
         events: Dict[Tuple[str, date], Dict[str, Tuple[float, str]]] = {}
         # Same keys, but the filings that move a price without stating a ratio.
         marks: Dict[Tuple[str, date], Dict[str, str]] = {}
+        # The company behind each event, and the symbol the feed filed it under
+        # when that is not the one the event ended up keyed by.
+        ident: Dict[Tuple[str, date], Tuple[str, str]] = {}
+        rekeyed = 0
         for year in range(start_year, end_year + 1):
             # Closed years never change, so they are served from the R2 cache;
             # the current year must be re-fetched or tonight's ex-dates are missed.
@@ -302,10 +365,15 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
                 mark = non_adjusting_kind(subject) if factor is None else None
                 if factor is None and mark is None:
                     continue
-                sym = (r.get("symbol") or "").strip()
+                filed_as = (r.get("symbol") or "").strip()
                 ex = _parse_ex_date(r.get("exDate") or "")
-                if not sym or ex is None:
+                if not filed_as or ex is None:
                     continue
+                isin = (r.get("isin") or "").strip()
+                sym = resolve_symbol(filed_as, isin, ex, spans)
+                if sym != filed_as:
+                    rekeyed += 1
+                ident.setdefault((sym, ex), (isin, filed_as))
                 label = " ".join(subject.split())
                 if factor is not None:
                     events.setdefault((sym, ex), {})[label] = (factor, kind)
@@ -322,12 +390,14 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
             if not filings:
                 # Price-moving, no ratio. Recorded so the audit can explain the
                 # cliff this leaves in the adjusted history, never applied.
+                isin, filed_as = ident.get((sym, ex), ("", sym))
                 rows.append({
-                    "symbol": sym, "ex_date": ex, "factor": 1.0,
+                    "symbol": sym, "isin": isin, "ex_date": ex, "factor": 1.0,
                     "kind": "+".join(sorted(set(marked.values()))),
                     "status": "not_adjusting", "implied": None,
                     "subject": " | ".join(marked),
-                    "source_ex_date": ex, "applied": False,
+                    "source_ex_date": ex,
+                    "filed_as": filed_as, "applied": False,
                 })
                 continue
 
@@ -362,8 +432,10 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
             else:
                 status, ex_used, implied_val = "unverified", ex, best[1]
 
+            isin, filed_as = ident.get((sym, ex), ("", sym))
             rows.append({
                 "symbol": sym,
+                "isin": isin,
                 "ex_date": ex_used,
                 "factor": factor,
                 "kind": kind,
@@ -373,9 +445,13 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
                 # of a compounded one rather than whichever arrived first.
                 "subject": " | ".join(list(filings) + list(marked)),
                 "source_ex_date": ex,
+                "filed_as": filed_as,
                 "applied": status == "verified",
             })
 
+        if rekeyed:
+            print(f"[actions] {rekeyed} filing(s) re-keyed to the symbol the tape "
+                  f"used at the ex-date")
         table = pa.Table.from_pylist(rows, schema=SCHEMA)
         if write:
             buf = io.BytesIO()

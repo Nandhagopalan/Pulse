@@ -216,6 +216,14 @@ afterwards with `python -m pipeline sync --local DIR`.
 - **`PREVCLOSE` in the bhavcopy is not restated on an ex-date.** Any split
   detector built on "stored close vs official previous close" silently finds
   nothing. Verify against the close-to-close gap instead.
+- **NSE re-keys a company's filings to its *current* symbol; the bars never
+  move.** A rename therefore unhooks every past filing from the bars it
+  re-bases. HEG became HEGAM on 2026-09-22 and its 2026-09-07 demerger arrived
+  filed as HEGAM while the bars that fell said HEG, which failed the nightly
+  audit on a cliff its own dataset explained. Where the action states a ratio
+  the same miss is silent: it records `no_bars` and is never applied.
+  `corporate_actions.resolve_symbol` resolves filings through ISIN; never add a
+  symbol-keyed join to the actions dataset without it.
 - **`R2_TOKEN_VALUE` alone cannot authenticate.** The S3 API needs the access
   key **pair** (`R2_KEY_ID` / `R2_SECRET_KEY`); the secret is the token's
   SHA-256, but the key id is the token's id and cannot be derived.

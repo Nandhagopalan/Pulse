@@ -92,7 +92,8 @@ not per filing.
 
 | Column | Type | Note |
 | --- | --- | --- |
-| `symbol` | string | |
+| `symbol` | string | the symbol **the tape used at the ex-date**, which is not always the one the filing names |
+| `isin` | string | the company, from the filing; the key that survives a rename |
 | `ex_date` | date32 | the date the tape actually moved, after slack correction |
 | `factor` | float64 | `k`; `adjusted = raw / k` for bars *before* `ex_date`, `volume * k` |
 | `kind` | string | `bonus` \| `split` \| `bonus+split` |
@@ -100,10 +101,24 @@ not per filing.
 | `implied` | float64 | the ratio the tape actually showed |
 | `subject` | string | the raw NSE label, kept for audit |
 | `source_ex_date` | date32 | what the filing said, before slack correction |
+| `filed_as` | string | the feed's symbol, when the event had to be re-keyed away from it |
 | `applied` | bool | whether the adjustment is used downstream |
 
 Consumed through `ca.adjusted_bars_cte()`, which every reader of adjusted prices
 goes through — analytics, the strategy engine, the audit and `verify`.
+
+**`symbol` is resolved, not copied.** NSE re-keys a company's whole filing
+history to whatever symbol it trades under today, while the bars keep the symbol
+of the session they were printed in, so a rename silently unhooks every past
+filing from the bars it re-bases. 437 ISINs in the lake have changed symbol at
+least once. The build resolves each filing through its ISIN to the symbol the
+tape actually carried on the ex-date, and records the feed's own spelling in
+`filed_as`; 86 filings land somewhere other than where the feed filed them, and
+30 of those are splits and bonuses that were previously recorded `no_bars` and
+never applied. The rule is deliberately narrow — a filing moves only when its
+own symbol had no bars at the ex-date and exactly one other symbol sharing its
+ISIN did — because a wrong re-key would apply one company's split to another's
+history. `tests/test_symbol_rename.py` pins it.
 
 #### `curated/instruments/constituents.parquet` — index membership
 

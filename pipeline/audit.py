@@ -149,9 +149,14 @@ FROM gaps g
 JOIN live l ON l.symbol = g.symbol
 LEFT JOIN ident i ON i.symbol = g.symbol
 -- Any filing near this session that moves a price without stating a ratio.
+-- Matched on ISIN as well as symbol: NSE re-keys a company's filings to the
+-- symbol it trades under today, so after a rename the filing that explains a
+-- cliff names a symbol the falling bars never carried. `corporate_actions`
+-- resolves the unambiguous ones back at build time; this catches the rest,
+-- where two symbols shared the ISIN at the ex-date and it declined to guess.
 LEFT JOIN LATERAL (
     SELECT a.kind FROM read_parquet('{actions_uri}') a
-    WHERE a.symbol = g.symbol
+    WHERE (a.symbol = g.symbol OR (i.isin <> '' AND a.isin = i.isin))
       AND NOT a.applied
       AND (a.kind LIKE '%scheme%' OR a.kind LIKE '%rights%')
       AND abs(datediff('day', a.ex_date, g.date)) <= {slack}
