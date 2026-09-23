@@ -120,6 +120,37 @@ own symbol had no bars at the ex-date and exactly one other symbol sharing its
 ISIN did — because a wrong re-key would apply one company's split to another's
 history. `tests/test_symbol_rename.py` pins it.
 
+#### `curated/instruments/symbol_changes.parquet` — renames
+
+`company`, `old_symbol`, `new_symbol` (string), `effective` (date32). Written by
+`ingest/symbol_changes.py` from NSE's symbol change master, refreshed nightly
+alongside the constituents; ~1,050 rows, 602 of which name two symbols this lake
+actually holds.
+
+NSE lets a company change its trading symbol without changing what it is, and
+the bhavcopy records whatever the symbol was on the day — so the tape hands over
+mid-series and nineteen years of HEG become a dead series while HEG Advanced
+Materials looks like it listed yesterday. This dataset is what puts them back
+together, in two places:
+
+- **`ca.renames_for()` → `ca.adjusted_bars_cte()`** folds a renamed company's
+  bars into the name it trades under now, so analytics, the strategy engine, the
+  audit and `verify` all see one continuous series. Applied at compute time; a
+  stored bar is what the tape printed, and the symbol it printed under is part
+  of that. The fold is only taken where the bars confirm the handover — the old
+  symbol must stop printing before the new one starts, because two symbols
+  quoting on the same session are two companies whatever the master says.
+- **`ca.resolve_symbol()`** walks it *backwards*, to answer "which bars did this
+  filing re-base?". NSE files every action under the symbol the company carries
+  today, so an action older than the rename names a symbol the falling bars
+  never carried. 202 filings are re-keyed this way, and 115 of them had been
+  recorded `no_bars` and never applied — MINDAIND's 2016 5:1 and ADANIPORTS'
+  2010 5:1 among them.
+
+ISIN remains a fallback inside `resolve_symbol`, and only a fallback: an ISIN
+changes on a face-value split, which is the event most likely to need re-keying,
+so matching on it misses exactly at the boundary.
+
 #### `curated/instruments/constituents.parquet` — index membership
 
 `index_name`, `symbol`, `name`, `industry`, `isin` (all string). Written by

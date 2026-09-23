@@ -29,13 +29,15 @@ from pipeline.ingest import corporate_actions as ca
 
 BARS = pa.schema([
     ("symbol", pa.string()), ("date", pa.date32()),
+    ("isin", pa.string()), ("series", pa.string()),
     ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
     ("close", pa.float64()), ("volume", pa.float64()), ("traded_value", pa.float64()),
 ])
 
 
 def _bar(sym, d, high, close):
-    return {"symbol": sym, "date": d, "open": close, "high": high,
+    return {"symbol": sym, "date": d, "isin": f"INE{sym[:6]:X<6}01010", "series": "EQ",
+            "open": close, "high": high,
             "low": close * 0.98, "close": close, "volume": 1e5,
             "traded_value": close * 1e5}
 

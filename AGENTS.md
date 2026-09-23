@@ -151,6 +151,7 @@ uv run python -m pipeline backfill          # 2007 → today, NSE archives → R
 uv run python -m pipeline reference         # index constituents + sector map
 uv run python -m pipeline industry          # ISIN-keyed industry labels (a few thousand calls; manual)
 uv run python -m pipeline actions           # rebuild the corporate action dataset
+uv run python -m pipeline symbols           # refresh NSE's symbol rename master
 uv run python -m pipeline analytics         # compute the snapshot, print it, publish nothing
 uv run python -m pipeline publish           # compute + upsert into Supabase
 uv run python -m pipeline eod               # the nightly chain (what CI runs)
@@ -222,8 +223,11 @@ afterwards with `python -m pipeline sync --local DIR`.
   filed as HEGAM while the bars that fell said HEG, which failed the nightly
   audit on a cliff its own dataset explained. Where the action states a ratio
   the same miss is silent: it records `no_bars` and is never applied.
-  `corporate_actions.resolve_symbol` resolves filings through ISIN; never add a
-  symbol-keyed join to the actions dataset without it.
+  `corporate_actions.resolve_symbol` resolves filings through NSE's rename
+  master (ISIN is only a fallback — it changes on a face-value split, which is
+  the event most likely to need re-keying). 602 renames in the lake, folded at
+  compute time by `ca.renames_for`. Never add a symbol-keyed join to the bars or
+  the actions dataset without going through one of those two.
 - **`R2_TOKEN_VALUE` alone cannot authenticate.** The S3 API needs the access
   key **pair** (`R2_KEY_ID` / `R2_SECRET_KEY`); the secret is the token's
   SHA-256, but the key id is the token's id and cannot be derived.

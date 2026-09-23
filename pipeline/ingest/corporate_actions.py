@@ -44,6 +44,7 @@ import pyarrow.parquet as pq
 
 from ..config import CURATED_ACTIONS, CURATED_DAILY, config, s3_uri
 from ..sources import nse, r2
+from .symbol_changes import symbol_at
 
 if TYPE_CHECKING:
     import duckdb
@@ -277,6 +278,57 @@ GROUP BY isin, symbol
 """
 
 
+def changes_uri() -> str:
+    """Where the rename master lives, honouring a local mirror."""
+    from . import backfill
+    from .symbol_changes import CHANGES_KEY
+    if backfill.LOCAL_ROOT is not None and not backfill.USE_R2:
+        return str(backfill.LOCAL_ROOT / CHANGES_KEY)
+    return s3_uri(CHANGES_KEY)
+
+
+def predecessor_map(con: "duckdb.DuckDBPyConnection") -> Dict[str, Tuple[str, date]]:
+    """
+    NSE's rename master as a walk-backwards map, or empty if it is not there.
+
+    Read by trying rather than by asking whether the object exists: one round
+    trip instead of two, and the same answer either way.
+
+    Soft on purpose. A lake built before this dataset existed, or a night when
+    the fetch failed, still gets correct prices — filings simply stay where the
+    feed keyed them, which is how this ran for years. Not worth failing on.
+    """
+    from .symbol_changes import predecessors
+    try:
+        rows = [{"old_symbol": o, "new_symbol": n, "effective": e}
+                for o, n, e in con.execute(
+                    "SELECT old_symbol, new_symbol, effective FROM "
+                    f"read_parquet('{changes_uri()}')").fetchall()]
+    except Exception:  # noqa: BLE001 — no map is a degradation, not a fault
+        return {}
+    return predecessors(rows)
+
+
+SYMBOL_SPAN_SQL = """
+SELECT symbol, min(date) AS first_date, max(date) AS last_date
+FROM read_parquet('{daily_glob}') GROUP BY symbol
+"""
+
+
+def symbol_spans(con: "duckdb.DuckDBPyConnection", daily_glob: str) -> Dict[str, Tuple[date, date]]:
+    """
+    When each symbol printed, over every bar — ISIN or no ISIN.
+
+    Deliberately not derived from `isin_spans`: bars before about 2011 carry no
+    ISIN in this lake, and those are exactly the years the oldest renames sit
+    in. Checking the rename walk against an ISIN-keyed index silently rejected
+    MUNDRAPORT, MADRASCEM and TATATEA, which is to say it rejected the splits it
+    was written to find.
+    """
+    return {sym: (first, last) for sym, first, last in con.execute(
+        SYMBOL_SPAN_SQL.format(daily_glob=daily_glob)).fetchall()}
+
+
 def isin_spans(con: "duckdb.DuckDBPyConnection", daily_glob: str) -> Dict[str, List[Tuple[str, date, date]]]:
     """Every symbol each ISIN has traded under, with the dates it did."""
     spans: Dict[str, List[Tuple[str, date, date]]] = {}
@@ -287,8 +339,26 @@ def isin_spans(con: "duckdb.DuckDBPyConnection", daily_glob: str) -> Dict[str, L
 
 
 def resolve_symbol(sym: str, isin: str, ex: date,
-                   spans: Dict[str, List[Tuple[str, date, date]]]) -> str:
-    """The symbol the tape used for this company on this ex-date."""
+                   spans: Dict[str, List[Tuple[str, date, date]]],
+                   prev: Optional[Dict[str, Tuple[str, date]]] = None,
+                   traded: Optional[Dict[str, Tuple[date, date]]] = None) -> str:
+    """
+    The symbol the tape used for this company on this ex-date.
+
+    NSE's rename master answers this outright and is tried first. ISIN is the
+    fallback, and it is a fallback rather than the rule because an ISIN changes
+    on a face-value split — the very event most likely to need re-keying — so
+    matching on it misses exactly at the boundary. MINDAIND's 2016 5:1 split is
+    that case: filed as UNOMINDA, and on its ex-date the bars changed ISIN, so
+    neither side of the ISIN matched and a 5x re-basing went unapplied.
+    """
+    if prev and traded:
+        walked = symbol_at(sym, ex, prev)
+        # Only trust the walk if it lands on bars. The master says nothing about
+        # whether this lake holds that stretch of the company's life.
+        span = traded.get(walked)
+        if walked != sym and span is not None and span[0] <= ex <= span[1]:
+            return walked
     if not isin:
         return sym
     cands = spans.get(isin)
@@ -329,6 +399,8 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
         # Which symbol each company's bars carried, and when — so a filing that
         # arrives under a renamed symbol still finds the tape it re-bases.
         spans = isin_spans(con, s3_uri(f"{CURATED_DAILY}/*/data.parquet"))
+        prev = predecessor_map(con)
+        traded = symbol_spans(con, s3_uri(f"{CURATED_DAILY}/*/data.parquet"))
 
         # Parse every filing into the *event* it belongs to, where an event is
         # one symbol on one ex-date. A bonus and a face-value split declared
@@ -370,7 +442,7 @@ def build(con: Optional["duckdb.DuckDBPyConnection"] = None,
                 if not filed_as or ex is None:
                     continue
                 isin = (r.get("isin") or "").strip()
-                sym = resolve_symbol(filed_as, isin, ex, spans)
+                sym = resolve_symbol(filed_as, isin, ex, spans, prev, traded)
                 if sym != filed_as:
                     rekeyed += 1
                 ident.setdefault((sym, ex), (isin, filed_as))
@@ -472,7 +544,71 @@ def summary(table: pa.Table) -> str:
 
 
 # ── Adjustment ───────────────────────────────────────────────────────────────
-def adjusted_bars_cte(daily_glob: str, actions_uri: str, min_date: Optional[str] = None) -> str:
+def rename_map(con: "duckdb.DuckDBPyConnection", daily_glob: str,
+               renames_uri: str) -> Dict[str, str]:
+    """
+    Old symbol -> the name it trades under today, for renames the tape confirms.
+
+    NSE's master is authoritative about the rename but says nothing about
+    whether *this* lake holds both sides, so the handover is checked against the
+    bars: the old symbol must stop printing before the new one starts. Two
+    symbols quoting on the same session are two companies whatever the master
+    says, and merging them would splice one company's prices into another's
+    history — silently, and in the direction of a higher all-time high.
+
+    Checked pairwise before the chain is walked, so a bad link cannot carry a
+    good one with it.
+    """
+    spans = {sym: (mn, mx) for sym, mn, mx in con.execute(
+        f"SELECT symbol, min(date), max(date) FROM read_parquet('{daily_glob}') "
+        "GROUP BY symbol").fetchall()}
+    pairs: List[Tuple[str, str]] = []
+    for old, new in con.execute(
+            f"SELECT old_symbol, new_symbol FROM read_parquet('{renames_uri}') "
+            "ORDER BY effective").fetchall():
+        a, b = spans.get(old), spans.get(new)
+        if a is None or b is None or a[1] >= b[0]:
+            continue
+        pairs.append((old, new))
+    from .symbol_changes import resolve_chain
+    return resolve_chain(pairs)
+
+
+def renames_for(con: "duckdb.DuckDBPyConnection", daily_glob: str) -> Dict[str, str]:
+    """
+    The rename map every reader of adjusted prices folds through, or nothing.
+
+    Soft on purpose. The map is refreshed from NSE at the top of the nightly
+    chain, and if that fetch failed there is a stored copy; if there is no
+    stored copy either — a fresh lake, or the first run after this shipped —
+    prices are still correct, history is merely split at the renames, which is
+    how it behaved for years. Correct-but-fragmented is worth a night's publish;
+    raising here would not be.
+    """
+    try:
+        return rename_map(con, daily_glob, changes_uri())
+    except Exception:  # noqa: BLE001 — no map is a degradation, not a fault
+        return {}
+
+
+def _rename_cte(renames: Optional[Dict[str, str]]) -> str:
+    """The lookup the fold joins against, or nothing when there is no map."""
+    if not renames:
+        return ""
+    values = ", ".join(f"('{o}', '{n}')" for o, n in sorted(renames.items()))
+    return f"renames(old_symbol, new_symbol) AS (VALUES {values}),\n"
+
+
+def _folded(renames: Optional[Dict[str, str]], alias: str) -> Tuple[str, str]:
+    """`alias`'s symbol expression and join, folded to the current name or not."""
+    if not renames:
+        return f"{alias}.symbol", ""
+    return (f"COALESCE(m.new_symbol, {alias}.symbol)",
+            f"LEFT JOIN renames m ON m.old_symbol = {alias}.symbol")
+
+
+def adjusted_bars_cte(daily_glob: str, actions_uri: str, min_date: Optional[str] = None,
+                      renames: Optional[Dict[str, str]] = None) -> str:
     """
     SQL CTEs yielding `bars_adj`: every bar with its cumulative factor `k` and
     split-adjusted OHLCV.
@@ -481,17 +617,40 @@ def adjusted_bars_cte(daily_glob: str, actions_uri: str, min_date: Optional[str]
     total_product / product_up_to_d, which turns what would be a range join over
     8M bars into a single backward ASOF join.
     """
-    date_filter = f"AND date >= DATE '{min_date}'" if min_date else ""
+    bar_date_filter = f"AND b.date >= DATE '{min_date}'" if min_date else ""
+    rename_cte = _rename_cte(renames)
+    bar_sym, bar_join = _folded(renames, "b")
+    act_sym, act_join = _folded(renames, "a")
+    # Bars and actions are folded into the *same* namespace before the factors
+    # compound, never after. A split that lands once a company has been renamed
+    # is filed under the new symbol, and the bars it re-bases were printed under
+    # the old one; adjusting first and stitching afterwards would leave that
+    # history un-split at the join, which is the very cliff this file exists to
+    # remove.
     return f"""
-WITH bars AS (
-    SELECT symbol, date, open, high, low, close, volume, traded_value
-    FROM read_parquet('{daily_glob}')
-    WHERE close > 0 {date_filter}
+WITH {rename_cte}bars AS (
+    -- `series` and `isin` ride along because a caller that re-joined the raw
+    -- table on symbol would silently drop every pre-rename bar: after the fold
+    -- this side says HEGAM and the stored bar still says HEG.
+    SELECT {bar_sym} AS symbol,
+           b.date, b.open, b.high, b.low, b.close, b.volume, b.traded_value,
+           b.series, b.isin
+    FROM read_parquet('{daily_glob}') b
+    {bar_join}
+    WHERE b.close > 0 {bar_date_filter}
+),
+acts_named AS (
+    SELECT {act_sym} AS symbol, a.ex_date, a.factor
+    FROM read_parquet('{actions_uri}') a
+    {act_join}
+    WHERE a.applied AND a.factor BETWEEN {MIN_FACTOR} AND {MAX_EVENT_FACTOR}
 ),
 acts AS (
-    SELECT symbol, ex_date, factor
-    FROM read_parquet('{actions_uri}')
-    WHERE applied AND factor BETWEEN {MIN_FACTOR} AND {MAX_EVENT_FACTOR}
+    -- One factor per symbol and ex-date after the fold: a company that was
+    -- renamed between two filings of the same event would otherwise contribute
+    -- it twice, and these compound as a product.
+    SELECT symbol, ex_date, max(factor) AS factor
+    FROM acts_named GROUP BY symbol, ex_date
 ),
 acts_cum AS (
     SELECT symbol, ex_date,
@@ -511,8 +670,11 @@ bars_k AS (
 ),
 bars_adj AS (
     SELECT symbol, date,
-           open / k AS open, high / k AS high, low / k AS low, close / k AS close,
-           volume * k AS volume, traded_value, k
+           open / k AS open, high / k AS high, low / k AS low,
+           close / k AS close, volume * k AS volume, traded_value, k,
+           -- The price as it actually traded, kept beside the adjusted one so
+           -- the penny-stock floor can see it without a second join.
+           close AS raw_close, series, isin
     FROM bars_k
 )
 """

@@ -158,13 +158,16 @@ def from_lake(con, start: Optional[str] = None, sectors: bool = True) -> MarketD
     """
     daily = s3_uri(f"{CURATED_DAILY}/*/data.parquet")
     actions = s3_uri(ca.ACTIONS_KEY)
-    cte = ca.adjusted_bars_cte(daily, actions, min_date=start)
-    tbl = con.execute(cte + f"""
-        SELECT a.symbol, a.date, a.open, a.high, a.low, a.close, a.volume,
-               a.traded_value, r.close AS raw_close, r.series, r.isin
-        FROM bars_adj a
-        JOIN read_parquet('{daily}') r ON r.symbol = a.symbol AND r.date = a.date
-        ORDER BY a.symbol, a.date
+    cte = ca.adjusted_bars_cte(daily, actions, min_date=start,
+                               renames=ca.renames_for(con, daily))
+    # No re-join to the raw table: `bars_adj` carries raw_close, series and isin
+    # already. Joining on symbol would drop every bar a renamed company printed
+    # under its old name, which is most of its history.
+    tbl = con.execute(cte + """
+        SELECT symbol, date, open, high, low, close, volume,
+               traded_value, raw_close, series, isin
+        FROM bars_adj
+        ORDER BY symbol, date
     """).fetch_arrow_table()
 
     isin_map = _isin_map(np.asarray(tbl.column("symbol").to_pylist(), dtype=object),

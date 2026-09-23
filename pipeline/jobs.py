@@ -15,7 +15,7 @@ from typing import Optional
 def eod(session: Optional[date] = None) -> None:
     from . import audit
     from .compute import analytics, publish, strategy
-    from .ingest import backfill, industry, reference
+    from .ingest import backfill, industry, reference, symbol_changes
     from .ingest import corporate_actions as ca
 
     today = session or date.today()
@@ -36,6 +36,14 @@ def eod(session: Optional[date] = None) -> None:
         industry.normalize()
     except Exception as err:  # noqa: BLE001 — the labels are context, not the run
         print(f"[eod] label reconciliation failed ({err}) — using them as stored")
+
+    # Which symbols are the same company under a new name. Soft: a stale map
+    # costs a night of history being split at whatever renamed today, which is
+    # how the lake read for years. It is not worth the publish.
+    try:
+        symbol_changes.refresh()
+    except Exception as err:  # noqa: BLE001 — stale renames beat a failed run
+        print(f"[eod] symbol change refresh failed ({err}) — continuing with stored map")
 
     print("── ingest ───────────────────────────────────────────────")
     # Re-running the open year picks up today's session and repairs any day the

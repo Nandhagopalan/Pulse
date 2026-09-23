@@ -10,6 +10,7 @@ Commands are dispatched here; `__main__.py` only forwards to `main()` so that
     python -m pipeline industry            # industry + sector labels, keyed by ISIN
     python -m pipeline industry --normalize  # reconcile stored labels, no fetching
     python -m pipeline actions             # rebuild the corporate action dataset
+    python -m pipeline symbols             # refresh NSE's symbol rename master
     python -m pipeline analytics           # compute the daily snapshot (dry run)
     python -m pipeline publish             # compute + upsert into Supabase
     python -m pipeline eod                 # nightly chain: ingest → actions → publish
@@ -49,6 +50,8 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, help="stop after N scrips (for a smoke test)")
     p.add_argument("--normalize", action="store_true",
                    help="reconcile the stored labels only; fetches nothing")
+
+    sub.add_parser("symbols", help="refresh the symbol rename master from NSE")
 
     p = sub.add_parser("actions", help="rebuild corporate actions from the NSE feed")
     p.add_argument("--refresh", action="store_true", help="re-fetch years already cached in R2")
@@ -124,6 +127,10 @@ def main(argv=None) -> int:
         table = (industry.normalize() if args.normalize
                  else industry.build(refresh=args.refresh, limit=args.limit))
         print("[industry]", industry.summary(table))
+
+    elif args.cmd == "symbols":
+        from .ingest import symbol_changes
+        symbol_changes.refresh()
 
     elif args.cmd == "actions":
         from .ingest import corporate_actions as ca

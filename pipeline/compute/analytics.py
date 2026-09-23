@@ -114,7 +114,8 @@ def _load_window(con) -> dict:
         """
     ).fetchone()[0]
 
-    cte = ca.adjusted_bars_cte(daily_glob, actions_uri, min_date=start.isoformat())
+    cte = ca.adjusted_bars_cte(daily_glob, actions_uri, min_date=start.isoformat(),
+                               renames=ca.renames_for(con, daily_glob))
     tbl = con.execute(
         cte + "SELECT symbol, date, open, high, low, close, volume FROM bars_adj ORDER BY symbol, date"
     ).fetch_arrow_table()
@@ -155,7 +156,10 @@ def _load_aths(con) -> Dict[str, dict]:
     like with like, so a record close reads 0.0%.
     """
     daily_glob, _, actions_uri, _, _ = _uris()
-    cte = ca.adjusted_bars_cte(daily_glob, actions_uri)
+    # All-time highs above all: a renamed company whose history is not folded
+    # reads as far below a high it is in fact sitting on.
+    cte = ca.adjusted_bars_cte(daily_glob, actions_uri,
+                               renames=ca.renames_for(con, daily_glob))
     rows = con.execute(
         cte + """
         SELECT symbol,
@@ -190,7 +194,8 @@ def _load_weekly(con) -> dict:
         """
     ).fetchone()[0]
 
-    cte = ca.adjusted_bars_cte(daily_glob, actions_uri, min_date=start.isoformat())
+    cte = ca.adjusted_bars_cte(daily_glob, actions_uri, min_date=start.isoformat(),
+                               renames=ca.renames_for(con, daily_glob))
     tbl = con.execute(
         cte + """
         SELECT symbol,

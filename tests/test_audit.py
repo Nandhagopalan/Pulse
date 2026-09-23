@@ -36,6 +36,7 @@ from pipeline.ingest import corporate_actions as ca
 
 BARS = pa.schema([
     ("symbol", pa.string()), ("date", pa.date32()), ("isin", pa.string()),
+    ("series", pa.string()),
     ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
     ("close", pa.float64()), ("volume", pa.float64()), ("traded_value", pa.float64()),
 ])
@@ -68,7 +69,7 @@ def lake(tmp_path, monkeypatch):
     rows = []
     for sym, (isin, closes, sessions) in CASES.items():
         for d, c in zip(sessions, closes):
-            rows.append({"symbol": sym, "date": d, "isin": isin, "open": c,
+            rows.append({"symbol": sym, "date": d, "isin": isin, "series": "EQ", "open": c,
                          "high": c * 1.01, "low": c * 0.99, "close": float(c),
                          "volume": 1e5, "traded_value": c * 1e5})
 

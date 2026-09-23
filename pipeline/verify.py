@@ -86,7 +86,7 @@ def report(symbol: str, tail: int = 8) -> None:
         print(f"    {mark}{ex}  k={f:<7.4f} implied={imp:<8} {kind:<12} {status:<11} {subject[:44]}")
 
     # ── Raw vs adjusted around each ex-date ──────────────────────────────────
-    cte = ca.adjusted_bars_cte(daily, actions)
+    cte = ca.adjusted_bars_cte(daily, actions, renames=ca.renames_for(con, daily))
     for ex, f, _k, status, _i, _s in acts:
         if status != "verified":
             continue

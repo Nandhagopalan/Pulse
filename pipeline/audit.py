@@ -186,7 +186,8 @@ def residuals(con=None) -> List[Finding]:
     con = con or _con()
     try:
         daily_glob = backfill.daily_glob()
-        cte = ca.adjusted_bars_cte(daily_glob, _actions_uri())
+        cte = ca.adjusted_bars_cte(daily_glob, _actions_uri(),
+                                   renames=ca.renames_for(con, daily_glob))
         rows = con.execute(cte + RESIDUAL_SQL.format(
             daily_glob=daily_glob, actions_uri=_actions_uri(), live_days=LIVE_WITHIN_DAYS,
             max_gap=MAX_SESSION_GAP, fall=RESIDUAL_FALL, rise=RESIDUAL_RISE,

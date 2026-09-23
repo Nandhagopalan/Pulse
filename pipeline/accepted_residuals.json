@@ -1,6 +1,24 @@
 {
-  "note": "Re-basings that survive every rule the audit can apply: not a fund unit, no demerger, scheme or rights issue filed anywhere near the date, and not a move the next fortnight undoes. Each was reviewed by hand and left unadjusted. Keep this list short \u2014 it suppresses an alarm, and an entry added carelessly hides a real unapplied action for good, which is exactly what happened when this file was a 78-row snapshot instead of a reviewed remainder.",
+  "note": "Re-basings that survive every rule the audit can apply: not a fund unit, no demerger, scheme or rights issue filed anywhere near the date, and not a move the next fortnight undoes. Each was reviewed by hand and left unadjusted. Keep this list short \u2014 it suppresses an alarm, and an entry added carelessly hides a real unapplied action for good, which is exactly what happened when this file was a 78-row snapshot instead of a reviewed remainder. Entries carrying a `why` were reviewed when symbol renames were folded together: each sat in a dead symbol's history, invisible to the live check, until its company's bars were rejoined under the name it trades under now.",
   "accepted": [
+    {
+      "symbol": "63MOONS",
+      "date": "2013-08-01",
+      "implied": 2.8168,
+      "why": "NSEL payment default. No filing within the month; the fall is permanent. Surfaced only once FINANTECH's history was folded into 63MOONS."
+    },
+    {
+      "symbol": "AURUM",
+      "date": "2020-12-23",
+      "implied": 80.791,
+      "why": "Interim dividend of Rs 974 on a Rs 985 share, filed by NSE for this exact date. A dividend re-bases the price and states no ratio, and nothing here adjusts for one. Surfaced once MAJESCO's history was folded into AURUM."
+    },
+    {
+      "symbol": "CCAVENUE",
+      "date": "2018-09-28",
+      "implied": 3.4285,
+      "why": "The September 2018 Infibeam collapse. No filing within the month and the price never returns. Surfaced once INFIBEAM's history was folded into CCAVENUE."
+    },
     {
       "symbol": "GTL",
       "date": "2011-06-20",

@@ -39,6 +39,7 @@ from pipeline.ingest import corporate_actions as ca
 # through it, so the fixture carries it too. Each case here is its own company.
 BARS = pa.schema([
     ("symbol", pa.string()), ("date", pa.date32()), ("isin", pa.string()),
+    ("series", pa.string()),
     ("open", pa.float64()), ("high", pa.float64()), ("low", pa.float64()),
     ("close", pa.float64()), ("volume", pa.float64()), ("traded_value", pa.float64()),
 ])
@@ -78,6 +79,7 @@ def lake(tmp_path, monkeypatch):
     for sym, (closes, _) in CASES.items():
         for d, c in zip(SESSIONS, closes):
             rows.append({"symbol": sym, "date": d, "isin": f"INE{sym[:6]:X<6}01010",
+                         "series": "EQ",
                          "open": c, "high": c * 1.01,
                          "low": c * 0.99, "close": c, "volume": 1e5,
                          "traded_value": c * 1e5})

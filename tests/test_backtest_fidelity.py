@@ -7,7 +7,7 @@ on purpose. If a refactor, an optimisation or a "harmless" tidy-up moves any of
 them, the strategy being traded is no longer the one that was validated, and
 this test is the only thing that would notice.
 
-Two things changed here after the previous baseline went stale, both worth
+Three things changed here after previous baselines went stale, all worth
 keeping:
 
   * **The window is pinned.** The old reference was taken over a lake ending
@@ -19,6 +19,19 @@ keeping:
     what the book runs, and whose figures were measured before the sector-label
     correction — they included the look-ahead that correction removed. Pinning a
     strategy nobody trades to numbers nobody trusts is worse than no test.
+  * **The lake underneath it was restated.** Symbol renames are now folded, so a
+    company that changed its name is one series rather than two, and 115
+    corporate actions that had been recorded `no_bars` — filed under a symbol
+    the tape never carried at the ex-date — began applying. MINDAIND's 2016 5:1
+    and ADANIPORTS' 2010 5:1 are among them. **No engine code changed for this
+    re-baseline**: `rules.py` and `book.py` are byte-identical, and the whole
+    move is the book seeing corrected prices. It makes three more trades on the
+    same rules; cagr 0.1698 -> 0.1696 and sharpe 1.17 -> 1.173.
+
+    This is the one edit to these literals that is *not* evidence of a
+    regression, and it is also the one most easily abused. A number here moves
+    for corrected data or it does not move at all — never to make a red test
+    green.
 
 Skipped unless a local mirror of the lake is available, since CI has no R2
 credentials:
@@ -44,16 +57,16 @@ END = "2026-08-29"
 
 # metric -> (expected, tolerance)
 REFERENCE = {
-    "cagr":         (0.1698, 0.0005),
-    "max_dd":       (-0.2468, 0.0010),
-    "sharpe":       (1.17, 0.02),
-    "n_trades":     (1080, 0),
-    "win_rate":     (0.4222, 0.005),
-    "payoff":       (2.921, 0.03),
-    "expectancy_r": (0.3948, 0.006),
+    "cagr":         (0.1696, 0.0005),
+    "max_dd":       (-0.2527, 0.0010),
+    "sharpe":       (1.173, 0.02),
+    "n_trades":     (1083, 0),
+    "win_rate":     (0.4321, 0.005),
+    "payoff":       (2.883, 0.03),
+    "expectancy_r": (0.3899, 0.006),
     "median_hold":  (10.0, 0.5),
-    "exposure":     (0.5195, 0.005),
-    "end":          (9.27e7, 3.0e5),
+    "exposure":     (0.5205, 0.005),
+    "end":          (9.2356e7, 3.0e5),
 }
 
 
